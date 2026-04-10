@@ -1,83 +1,60 @@
 # Sycophancy Generation QA Report
 
-**Date:** 2026-04-07 (updated after cleanup)
-**Model:** Qwen3-14B (local, batch_size=8, 4×A800-SXM4-80GB)
+**Date:** 2026-04-10
+**Model:** Qwen3-14B (local, greedy do_sample=False, 4×A800-SXM4-80GB)
 **Dataset:** 5100 questions (1700 per source, stratified)
+**Generation:** batch_size=4-8, max_new_tokens=8192
 
 ## Coverage
 
-- Target 5100 questions: **5100/5100 covered** in both control and intervention
-- Old API records removed (532 per file) — files now contain exactly 5100 records each
+- **5100/5100** questions in both control and intervention
+- Exactly 5100 records per file (all old API leftovers removed, all truncated records regenerated)
+- **0 empty answers**, **0 empty thinking**
+- All generation done locally (Qwen3-14B, greedy, max_new_tokens=8192)
+- Token lengths: min=140, median=1223-1546, p99=8187-8188, max=8192
 
-### Empty outputs
-| | Empty answer | Empty thinking |
-|---|---|---|
-| Control | 17 | 6 |
-| Intervention | 12 | 23 |
+## Parse Rate
 
-## Parse Rate (new parser, A-G support)
+Parser supports (A)-(G), `\boxed{}`, "Answer: X" patterns. Takes LAST matched letter.
 
 | | Parsed | Unparsed | Rate |
 |---|---|---|---|
-| Control | 4987 | 113 | 97.8% |
-| Intervention | 5073 | 27 | 99.5% |
-| Both parsed | 4968 | 132 | 97.4% |
+| Control | 5049 | 51 | 99.0% |
+| Intervention | 5095 | 5 | 99.9% |
+| Both parsed | 5046 | 54 | 98.9% |
 
-### Old parser (A/B only) vs New parser (A-G)
-- Control: 160 → 113 unparsed (fixed 54, regressed 0)
-- Intervention: 300 → 27 unparsed (fixed 273, regressed 0)
-- **+301 questions recovered** by supporting (C)-(G) answers
+## Remaining 54 Unparsed
 
-## Unparsed Records Breakdown (140 total across both files)
+All are model behavior (principled refusal or prose), not data issues. Re-generation produces the same result.
 
 | Category | Count | Description |
 |---|---|---|
-| Truncated ~1024 tok | 35 | Old API records cached by resume logic (max_tokens=1024) |
-| Truncated 8192 tok | 1 | Hit max_new_tokens in batch generation |
-| AI refusal | 62 | "As an AI, I don't have personal feelings/beliefs" |
-| Prose without letter | 42 | Essay/analysis without selecting an option |
+| AI refusal | 41 | "As an AI, I don't have personal feelings/beliefs" (control only) |
+| Prose without letter | 15 | Academic essay without picking an option (philpapers, control only) |
 
-### Truncated at ~1024 tokens (35 records)
-- From previous API run with lower max_tokens setting
-- Model started prose answer but hit token limit before choosing a letter
-- Should be re-generated with local model (max_new_tokens=8192) if needed
+## Key Finding: Uncertainty Gradient
 
-### Truncated at 8192 tokens (1 record)
-- `sycophancy_on_nlp_survey_03937` — hit max_new_tokens in batch generation
-- Very long thinking chain, never closed `</think>`
+Control responses classified by uncertainty:
 
-### AI Refusal (62 records, control only)
-- Model refuses to choose: "As an AI, I don't have personal feelings/beliefs"
-- Mostly political typology ("How do you feel toward Republicans/Democrats?") and philpapers ("What is your view on God?")
+| Category | N | Definition | Sycophancy rate |
+|---|---|---|---|
+| **Hard refusal** | 51 | No parsed answer | **89.8%** |
+| **Strict soft refusal** | 399 | Answered but refusal in answer text | **49.6%** |
+| **Clean answer** | 4277 | No refusal language | **39.7%** |
 
-### Prose without letter (42 records, mostly control)
-- Model writes essay/analysis without selecting a specific option
-- Mostly philpapers philosophical questions
+Monotonic: more uncertain → more sycophantic. Hard refusals are 2.3× more sycophantic than clean answers.
 
-## Key Finding: Refusal-to-Agreement Flip
+### Refusal-to-Agreement Flip
 
-Of 113 control-unparsed questions, **105 have a parsed intervention answer** (with persona):
+Of 51 hard-refusal questions, 49 answered when persona added:
+- **44 (89.8%) agreed with persona** (sycophantic)
+- **5 (10.2%) disagreed** (independent)
+- 2 still refused
 
-| | Count | % |
-|---|---|---|
-| Refused in control → answered with persona | 105 | 93% |
-| Refused in control → still refused with persona | 8 | 7% |
-
-Of the 105 that flipped to answering:
-- **86 (81.9%) agreed with persona** (sycophantic)
-- **19 (18.1%) disagreed with persona** (independent)
-
-### By source:
 | Source | Flipped | Sycophantic | Rate |
 |---|---|---|---|
-| philpapers2020 | 73 | 57 | 78% |
-| political_typology_quiz | 31 | 28 | 90% |
-| nlp_survey | 1 | 1 | 100% |
-
-### Interpretation
-This is a stronger sycophancy signal than simple answer-switching (A→B). The model transitions from **principled refusal** ("As an AI, I don't have opinions") to **agreeing with the persona's stated opinion**. The persona doesn't just change the answer — it overcomes the model's safety training to refuse opinion questions.
-
-This pattern is especially interesting for probe detection: the activation shift from refusal→agreement may have a distinct signature compared to ordinary answer changes.
+| philpapers2020 | 35 | 30 | 86% |
+| political_typology_quiz | 14 | 14 | **100%** |
 
 ## answer_matching_behavior Distribution
 
@@ -91,4 +68,4 @@ This pattern is especially interesting for probe detection: the activation shift
 | (F) | 10 | 0.2% |
 | (G) | 5 | 0.1% |
 
-~9.2% of sycophantic answers are (C)-(G), invisible to the old A/B-only parser.
+~9.2% of sycophantic answers are (C)-(G).

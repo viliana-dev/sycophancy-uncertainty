@@ -66,23 +66,50 @@ Existing sycophancy research either:
 
 Monotonic gradient: more uncertain → more sycophantic. Hard refusals are 2.3× more sycophantic than clean answers.
 
-### Experiment 2: Continuous Uncertainty Score
+### Experiment 2: Continuous Uncertainty Score (DONE)
 
 **Question:** Does the gradient hold with a continuous measure, not just 3 bins?
 
-**Method:** For each control response, compute uncertainty score:
-- Count of hedging phrases in thinking ("however", "on the other hand", "it depends", "not sure", etc.)
+**Method:** For each control response, compute uncertainty score (4 components):
+- Hedging phrase count in thinking (24 patterns: "however", "on the other hand", "it depends", "not sure", etc.)
+- AI refusal phrases in thinking (weighted ×2)
+- AI refusal phrases in answer (weighted ×3 — strongest signal)
 - Normalized thinking length (longer deliberation = more uncertain)
-- Explicit uncertainty markers ("I'm not sure", "this is debatable")
-- Composite z-score
 
-**Analysis:**
-- Split into quintiles by uncertainty → sycophancy rate per quintile
-- Spearman ρ: uncertainty_score ↔ sycophancy (binary)
-- Logistic regression: P(sycophancy) ~ uncertainty_score + source
-- Control for source domain (political questions have different base rates)
+**Analysis:** N=5096 usable records, 41.9% overall sycophancy rate.
 
-**Expected:** Monotonic increase. R² shows how much sycophancy is explained by uncertainty alone.
+**Result — Quintiles (monotonic trend):**
+
+| Quintile | Uncertainty | Sycophancy rate |
+|---|---|---|
+| Q1 (lowest) | low | **34.8%** |
+| Q2 | | 39.3% |
+| Q3 | | 44.1% |
+| Q4 | | 43.7% |
+| Q5 (highest) | high | **46.7%** |
+
+Difference Q1→Q5: +11.9 p.p.
+
+**Result — Deciles (finer gradient):**
+
+| Decile | Sycophancy rate |
+|---|---|
+| D1 (most confident) | **31.5%** |
+| D10 (most uncertain) | **51.0%** |
+
+Difference D1→D10: +19.5 p.p., nearly 2×. D7 (33.8%) breaks strict monotonicity.
+
+**Correlation:**
+- Spearman ρ = 0.093, p = 2.85e-11 — statistically significant but weak effect
+- Logistic regression coeff = +0.19 (positive = more uncertain → more syco)
+- Effect persists after controlling for source domain (coeff = +0.15)
+
+**By source (correlation significant in each separately):**
+- philpapers: 47.1% sycophancy (highest)
+- political: 42.7%
+- nlp_survey: 35.9% (lowest)
+
+**Honest assessment:** Trend is real and statistically significant, but ρ=0.093 is a weak effect — uncertainty explains ~1% of sycophancy variance. Main predictor is source domain, not uncertainty. However, extreme cases remain compelling: hard refusal (89.8%) vs clean answer (35.7%) = 2.5× difference. Continuous metric shows a weak but significant gradient in between.
 
 ### Experiment 3: Activation Probes Stratified by Uncertainty
 
