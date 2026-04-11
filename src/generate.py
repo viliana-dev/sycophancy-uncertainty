@@ -179,6 +179,7 @@ def run_sycophancy_pipeline(
     shard_id: int = 0,
     num_shards: int = 1,
     batch_size: int = 4,
+    model_family: str = "qwen",
 ):
     """Run the sycophancy pipeline using Anthropic evals + dual labeling.
 
@@ -197,11 +198,14 @@ def run_sycophancy_pipeline(
     Gemini labeling is automatically skipped in local mode (no API needed).
     """
     api_key = get_api_key() if not local else None
-    behavior_dir = GENERATED_DIR / "sycophancy"
+    is_gptoss = model_family == "gptoss"
+    dir_suffix = "_gptoss" if is_gptoss else ""
+    behavior_dir = GENERATED_DIR / f"sycophancy{dir_suffix}"
     behavior_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{BOLD}=== Sycophancy Pipeline (Anthropic Evals) ==={RESET}")
     print(f"  Mode: {'local GPU' if local else 'OpenRouter API'}")
+    print(f"  Model family: {model_family}")
     print(f"  Sources: {sources or 'all'}")
     print(f"  Gemini labeling: {'skip (local mode)' if local else ('skip' if skip_gemini else 'enabled')}")
     if num_shards > 1:
@@ -225,25 +229,49 @@ def run_sycophancy_pipeline(
 
     # Load local model if needed
     complete_fn = None
+    complete_fn_batch = None
     if local:
-        from src.lib import load_model, apply_chat_template_messages, parse_thinking_answer
         import torch
         from src.lib import resolve_device as _resolve_device
         _device = _resolve_device(device)
-        from src.config import SUBJECT_MODEL
-        print(f"\n{BOLD}Loading local model {SUBJECT_MODEL} ({_device}), batch_size={batch_size}...{RESET}")
-        _model, _tokenizer, _ = load_model(SUBJECT_MODEL, _device)
+
+        if is_gptoss:
+            from src.config import GPTOSS_MODEL
+            from src.lib import (
+                load_model_gptoss,
+                apply_chat_template_messages_harmony,
+                parse_thinking_answer_harmony,
+            )
+            _model_id = GPTOSS_MODEL
+            _max_new = 2048  # gpt-oss CoT is ~200 tokens, plenty of headroom
+            print(f"\n{BOLD}Loading local model {_model_id} ({_device}), batch_size={batch_size}...{RESET}")
+            _model, _tokenizer, _ = load_model_gptoss(_model_id, _device)
+            _apply_tpl = lambda msgs: apply_chat_template_messages_harmony(_tokenizer, msgs)
+            _parse = parse_thinking_answer_harmony
+        else:
+            from src.config import SUBJECT_MODEL
+            from src.lib import (
+                load_model,
+                apply_chat_template_messages,
+                parse_thinking_answer,
+            )
+            _model_id = SUBJECT_MODEL
+            _max_new = 8192
+            print(f"\n{BOLD}Loading local model {_model_id} ({_device}), batch_size={batch_size}...{RESET}")
+            _model, _tokenizer, _ = load_model(_model_id, _device)
+            _apply_tpl = lambda msgs: apply_chat_template_messages(_tokenizer, msgs)
+            _parse = parse_thinking_answer
+
         _tokenizer.padding_side = "left"
 
         def complete_fn(prompt: str) -> tuple[str, str]:
-            """Single-prompt wrapper (used by _run_sycophancy_pass one-by-one)."""
             msgs = [{"role": "user", "content": prompt}]
-            text = apply_chat_template_messages(_tokenizer, msgs)
+            text = _apply_tpl(msgs)
             inputs = _tokenizer(text, return_tensors="pt").to(_device)
             with torch.no_grad():
                 output_ids = _model.generate(
                     **inputs,
-                    max_new_tokens=8192,
+                    max_new_tokens=_max_new,
                     do_sample=False,
                     temperature=None,
                     top_p=None,
@@ -251,38 +279,33 @@ def run_sycophancy_pipeline(
                 )
             new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
             raw = _tokenizer.decode(new_tokens, skip_special_tokens=False)
-            thinking, answer = parse_thinking_answer(raw)
+            thinking, answer = _parse(raw)
             return answer, thinking
 
         def complete_fn_batch(prompts: list[str]) -> list[tuple[str, str]]:
-            """Batched inference: tokenize N prompts together, one generate call."""
-            texts = [
-                apply_chat_template_messages(_tokenizer, [{"role": "user", "content": p}])
-                for p in prompts
-            ]
+            texts = [_apply_tpl([{"role": "user", "content": p}]) for p in prompts]
             inputs = _tokenizer(
                 texts, return_tensors="pt", padding=True, truncation=False,
             ).to(_device)
             with torch.no_grad():
                 output_ids = _model.generate(
                     **inputs,
-                    max_new_tokens=8192,
+                    max_new_tokens=_max_new,
                     do_sample=False,
                     temperature=None,
                     top_p=None,
                     pad_token_id=_tokenizer.eos_token_id,
                 )
-            # With left-padding, generated tokens start at inputs["input_ids"].shape[1]
             input_len = inputs["input_ids"].shape[1]
             results = []
             for i in range(len(prompts)):
                 new_tokens = output_ids[i][input_len:]
                 raw = _tokenizer.decode(new_tokens, skip_special_tokens=False)
-                thinking, answer = parse_thinking_answer(raw)
+                thinking, answer = _parse(raw)
                 results.append((answer, thinking))
             return results
 
-        skip_gemini = True  # no API in local mode
+        skip_gemini = True
 
     # Step 2: Control pass
     print(f"\n{BOLD}Step 2: Control pass (persona stripped){RESET}")
@@ -658,6 +681,7 @@ def run_generation_pipeline(
     shard_id: int = 0,
     num_shards: int = 1,
     batch_size: int = 4,
+    model_family: str = "qwen",
 ):
     """Run the generation pipeline for any behavior."""
     if behavior == "sycophancy":
@@ -672,6 +696,7 @@ def run_generation_pipeline(
             shard_id=shard_id,
             num_shards=num_shards,
             batch_size=batch_size,
+            model_family=model_family,
         )
     elif behavior == "sandbagging":
         return run_sandbagging_pipeline(
@@ -719,6 +744,8 @@ def main():
                         help="Total shards for parallel multi-GPU runs")
     parser.add_argument("--batch-size", type=int, default=4,
                         help="Batch size for local inference (default: 4, use 8 on 80GB GPUs)")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen",
+                        help="Model family: qwen (Qwen3-14B) or gptoss (gpt-oss-20b)")
     args = parser.parse_args()
 
     run_generation_pipeline(
@@ -735,6 +762,7 @@ def main():
         shard_id=args.shard_id,
         num_shards=args.num_shards,
         batch_size=args.batch_size,
+        model_family=args.model_family,
     )
 
 

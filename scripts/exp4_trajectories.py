@@ -39,7 +39,7 @@ from src.lib import read_jsonl
 
 BEST_LAYER = 30
 REF_K = 100
-K_POINTS = [10, 25, 50, 75, 100]
+K_POINTS_THINKING = [10, 25, 50, 75, 100]
 
 
 def load_features(layer: int, k_pct: int) -> tuple[np.ndarray, np.ndarray]:
@@ -59,13 +59,25 @@ def main():
     # ─── Load features for all K at the chosen layer ─────────────────────
     feats: dict[int, np.ndarray] = {}
     qids_ref = None
-    for k in K_POINTS:
+
+    # K=0 (pre-thinking) if available
+    k0_path = DATA_DIR / "features" / "sycophancy" / f"L{args.layer}_K0.npz"
+    has_k0 = k0_path.exists()
+    if has_k0:
+        X0, qids0 = load_features(args.layer, 0)
+        qids_ref = qids0
+        feats[0] = X0
+        print(f"Loaded K=0 (pre-thinking) features: {X0.shape}", flush=True)
+
+    for k in K_POINTS_THINKING:
         X, qids = load_features(args.layer, k)
         if qids_ref is None:
             qids_ref = qids
         else:
             assert np.array_equal(qids, qids_ref), f"qid order mismatch at K{k}"
         feats[k] = X
+
+    K_POINTS = ([0] if has_k0 else []) + K_POINTS_THINKING
     qid_to_idx = {q: i for i, q in enumerate(qids_ref)}
     print(f"Loaded L{args.layer} features for K={K_POINTS}, N={len(qids_ref)}", flush=True)
 
