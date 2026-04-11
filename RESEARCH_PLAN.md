@@ -174,23 +174,49 @@ Two qualitatively distinct sycophancy regimes therefore appear plausible:
 
 A natural follow-up is whether a probe trained only on confident records *transfers* to uncertain ones (Exp 5: cross-prediction) — if not, this is computational evidence for two distinct mechanisms.
 
-### Experiment 4: Probe Confidence Trajectories by Uncertainty Group
+### Experiment 4: Probe Confidence Trajectories by Uncertainty Group (DONE)
 
 **Question:** Does the temporal dynamics of sycophancy differ between confident and uncertain responses?
 
-**Prerequisites:** Activation extraction + trained probe from Exp 3.
+**Method:** Train a single reference probe on L30 K100 (trainval). On the test split, apply it to L30 features at each K ∈ {10, 25, 50, 75, 100} — i.e. mean-pooled residual at progressively deeper fractions of the CoT. Split test records into 4 groups by (label × confidence regime, confidence = token entropy ≤ trainval median from Exp 5).
 
-**Method:** Plot P(sycophancy) token-by-token through CoT for:
-- Confident sycophancy (clean control + flipped to persona)
-- Uncertain sycophancy (soft refusal + flipped to persona)
-- Non-sycophantic control
+**Result — mean P(syco) per group, per K% of CoT:**
 
-**Hypothesis:**
-- Confident: gradual rise from start (model "knows" it will agree)
-- Uncertain: flat then sharp jump (model deliberates then "surrenders")
-- Control: flat low
+| Group | N | K10 | K25 | K50 | K75 | K100 |
+|---|---|---|---|---|---|---|
+| confident + non-syco | 259 | 0.402 | 0.255 | 0.138 | 0.103 | **0.076** |
+| confident + syco     | 133 | 0.660 | 0.717 | 0.783 | 0.822 | **0.825** |
+| uncertain + non-syco | 188 | 0.499 | 0.397 | 0.293 | 0.278 | 0.243 |
+| uncertain + syco     | 190 | 0.637 | 0.626 | 0.648 | 0.690 | **0.711** |
 
-Different trajectory shapes = different decision dynamics = publishable finding.
+Syco − non-syco gap per regime:
+
+| K | confident | uncertain |
+|---|---|---|
+| 10 | +0.258 | +0.138 |
+| 25 | +0.462 | +0.229 |
+| 50 | +0.646 | +0.354 |
+| 75 | +0.718 | +0.412 |
+| 100 | **+0.748** | **+0.468** |
+
+**Four distinct trajectory shapes:**
+
+1. **Confident + non-syco: steep descent.** 0.40 → 0.08 — the model starts mildly uncertain, then commits to its honest answer; the longer it reasons, the cleaner the non-sycophantic state becomes. Rich-get-richer for honesty.
+
+2. **Confident + syco: fast commit.** 0.66 → 0.83 — the signal is already huge at K10 (2.6× the confident-nonsyco value at the same depth). The model effectively "decides" to agree in the first 10% of CoT and spends the rest consolidating. This matches the Exp 3/5 finding of a crisp override signature.
+
+3. **Uncertain + non-syco: gentle descent.** 0.50 → 0.24 — same direction as confident-nonsyco but shallower. The model doesn't reach the same clean honest state.
+
+4. **Uncertain + syco: flat drift.** 0.64 → 0.71 — the syco sub-trajectory is almost horizontal (Δ = 0.07 across 90% of CoT). The probe already sees ~0.64 at K10 and barely moves. This is exactly the "drift" interpretation: the activation state is tilted toward the persona-favored option from the start and slowly accumulates a weak signal, rather than committing via a sharp transition.
+
+**Key observations:**
+
+- The sycophancy signal is **present from K10 in both regimes** — decision dynamics are not "deliberate honestly, then surrender at the end". The model's tilt shows up in the first tenth of CoT and the remaining reasoning is mostly post-hoc consolidation.
+- **Gap growth confident vs uncertain:** +0.49 vs +0.33 across K10→K100. The confident regime accumulates stronger evidence for sycophancy through CoT; the uncertain regime stays relatively undifferentiated.
+- **Confident syco's 0.83 final P(syco) vs uncertain syco's 0.71** directly mirrors the Exp 3 AUROC gap (0.998 vs 0.755): the probe's confidence in sycophancy-labels is itself confidence-regime-dependent.
+- **No "late jump" for uncertain syco** — the original hypothesis (deliberate → surrender) is wrong in shape. The actual uncertain pattern is slow tilt, not sharp flip.
+
+This is consistent with the "two mechanisms" reading from Exp 5: confident sycophancy has both an early baseline tilt and an accumulating sharp signature; uncertain sycophancy has only the baseline tilt, which is why its trajectory stays flat and its probe transfers asymmetrically.
 
 ### Experiment 5: Cross-Prediction (One Mechanism or Two?) (DONE)
 
