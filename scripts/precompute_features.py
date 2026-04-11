@@ -1,32 +1,30 @@
-"""Precompute mean-pooled features from activation files.
+"""Precompute mean-pooled features from activation files (parallel).
 
-Activation files are huge (~76 MB each, 5096 files = ~400 GB uncompressed)
-because they store full thinking sequences. For linear probing we only need
-mean-pooled vectors per (layer, K%) — much smaller (~2 GB total).
-
-This script iterates once through all activation files, computes
-mean_pool_at_percent for each (layer, K%), and saves a single NPZ per (layer, K%)
-as a (n_records, hidden_dim) float32 matrix.
+Activation files are ~16 MB compressed NPZs (np.savez_compressed),
+and single-threaded decompression is the bottleneck (~5 sec/file).
+With 120 cores available we parallelize via joblib.
 
 Output: data/features/sycophancy/L{layer}_K{k}.npz
         keys: 'X' (n, 5120), 'qids' (n,)
 
 Usage:
-    python scripts/precompute_features.py
+    python scripts/precompute_features.py [--n-jobs 32]
 """
 
+import argparse
 import sys
 from pathlib import Path
 
 import numpy as np
+from joblib import Parallel, delayed
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
     ACTIVATIONS_DIR,
-    DEFAULT_LAYER_FRACS,
     DATA_DIR,
+    DEFAULT_LAYER_FRACS,
     GENERATED_DIR,
     NUM_LAYERS,
     TRUNCATION_POINTS,
@@ -39,23 +37,47 @@ from src.lib import (
 )
 
 
+def process_one(
+    qid: str, cache_dir: Path, layer_indices: list[int], k_percents: list[float]
+) -> tuple[str, dict[tuple[int, float], np.ndarray] | None]:
+    acts = load_activations(cache_dir / f"{qid}.npz", layer_indices)
+    if acts is None:
+        return qid, None
+    out = {}
+    for layer in layer_indices:
+        arr = acts[layer].astype(np.float32)
+        for k in k_percents:
+            out[(layer, k)] = mean_pool_at_percent(arr, k)
+    return qid, out
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n-jobs", type=int, default=32)
+    args = parser.parse_args()
+
     layer_indices = resolve_layer_indices(NUM_LAYERS, DEFAULT_LAYER_FRACS)
     k_percents = [float(k) for k in TRUNCATION_POINTS]
 
-    print(f"Layers: {layer_indices}")
-    print(f"K%: {k_percents}")
+    print(f"Layers: {layer_indices}", flush=True)
+    print(f"K%: {k_percents}", flush=True)
+    print(f"Workers: {args.n_jobs}", flush=True)
 
     labeled_path = GENERATED_DIR / "sycophancy" / "labeled.jsonl"
     records = list(read_jsonl(labeled_path))
     qids = [r["question_id"] for r in records]
-    print(f"Records: {len(qids)}")
+    print(f"Records: {len(qids)}", flush=True)
 
     cache_dir = ACTIVATIONS_DIR / "sycophancy"
     out_dir = DATA_DIR / "features" / "sycophancy"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Pre-allocate output matrices: {(layer, k_pct): np.array(n, 5120)}
+    results = Parallel(n_jobs=args.n_jobs, backend="loky", verbose=0)(
+        delayed(process_one)(qid, cache_dir, layer_indices, k_percents)
+        for qid in tqdm(qids, desc="precompute", unit="ex", mininterval=5.0)
+    )
+
+    # Assemble into matrices
     n = len(qids)
     matrices: dict[tuple, np.ndarray] = {}
     for layer in layer_indices:
@@ -64,22 +86,16 @@ def main():
 
     valid_mask = np.zeros(n, dtype=bool)
     missing = 0
-
-    for i, qid in enumerate(tqdm(qids, desc="precompute", unit="ex")):
-        acts = load_activations(cache_dir / f"{qid}.npz", layer_indices)
-        if acts is None:
+    for i, (qid, feats) in enumerate(results):
+        if feats is None:
             missing += 1
             continue
         valid_mask[i] = True
-
-        for layer in layer_indices:
-            arr = acts[layer].astype(np.float32)
-            for k in k_percents:
-                matrices[(layer, k)][i] = mean_pool_at_percent(arr, k)
+        for key, vec in feats.items():
+            matrices[key][i] = vec
 
     print(f"\nLoaded: {valid_mask.sum()}/{n}, missing: {missing}", flush=True)
 
-    # Save per (layer, k_pct), keeping only valid rows
     valid_qids = np.array([qid for i, qid in enumerate(qids) if valid_mask[i]])
     for (layer, k), mat in matrices.items():
         valid_mat = mat[valid_mask]
