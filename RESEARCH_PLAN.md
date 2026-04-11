@@ -129,7 +129,16 @@ Difference D1→D10: +19.5 p.p., nearly 2×. D7 (33.8%) breaks strict monotonici
 - AUROC monotonically increases with K% across all layers → sycophancy crystallizes towards the end of reasoning, not in the first tokens.
 - L20/L30/L35 are close (~0.90); L10 lags (~0.87 max). Best: **L30 K100 = 0.9093**.
 
-**Best probe (L30 K100) stratified by uncertainty quintile (test set):**
+**Stratification by uncertainty — two metrics:**
+
+1. **Lexical heuristic** (hand-crafted hedging + AI-refusal phrase counts in control thinking, weighted by length). Captures *semantic* deliberation.
+2. **Token entropy** (`compute_answer_entropy.py`): a single forward pass per control record building `prompt + <think>thinking</think>\n\nThe answer is (`, then softmax over option-letter logits at the next-token position. Principled, model-derived signal.
+
+**Distribution of token entropy:** heavily bimodal — 65% of records have entropy < 0.001 (RLHF makes Qwen3-14B output near-deterministic letter logits even when it deliberated extensively in CoT). Only the top 35% has any meaningful entropy mass. This is itself an interesting negative result: for reasoning models, lexical signals from the CoT carry richer uncertainty information than logit entropy at the answer position. Both metrics are still tested.
+
+**Exp 2 redo with token entropy:** Spearman ρ = 0.144 (vs 0.093 for the heuristic), logistic coef +1.28 (vs +0.19). Token entropy is the *stronger* sycophancy predictor of the two — zero-entropy records have 37.1% sycophancy rate, nonzero have 50.9% (+14 pp).
+
+**Best probe (L30 K100) stratified by HEURISTIC quintile (percentile edges):**
 
 | Q | Range | N | Pos% | AUROC | Acc |
 |---|---|---|---|---|---|
@@ -139,13 +148,31 @@ Difference D1→D10: +19.5 p.p., nearly 2×. D7 (33.8%) breaks strict monotonici
 | Q4 | 6.7-8.0 | 118 | 42.4% | 0.893 ±0.030 | 0.814 |
 | Q5 (most uncertain) | 8.0-18.0 | 195 | 48.2% | **0.888** ±0.023 | 0.800 |
 
-**Result:** AUROC monotonically **decreases** as uncertainty rises. Q1−Q5 gap = 0.061 (~3 SE). The trend is robust — Q1 > Q5 in nearly all 20 (layer × K%) configs, not just the best one.
+Q1−Q5 gap = 0.061 (~3 SE). Monotonic trend across nearly all 20 (layer × K%) configs.
 
-**Interpretation:** Sycophancy IS encoded in residual stream activations (overall AUROC 0.91). But on confident examples, the sycophantic switch leaves a sharper neural trace — the probe separates them cleanly. On uncertain examples, the activations sit closer to the decision boundary and the probe loses ~6 AUROC points. Two regimes appear plausible:
-- **Confident sycophancy** — model deliberately overrides its prior, leaving a distinct activation signature.
-- **Uncertain sycophancy** — transition is smoother, harder to distinguish from honest deliberation.
+**Best probe (L30 K100) stratified by TOKEN ENTROPY quintile (rank-based):**
 
-This is the *opposite* of the naïve "uncertain → vulnerability with bright signal" hypothesis. Uncertainty doesn't amplify the sycophantic signal; it blurs its decodability.
+| Q | Range | N | Pos% | AUROC | Acc |
+|---|---|---|---|---|---|
+| Q1 (zero entropy, confident) | 0.0 | 154 | 31.8% | **0.998** ±0.002 | 0.974 |
+| Q2 | 0.0 | 154 | 34.4% | 0.949 ±0.017 | 0.870 |
+| Q3 | 0.0 | 154 | 39.6% | 0.890 ±0.026 | 0.799 |
+| Q4 | 0.0 | 154 | 49.4% | 0.854 ±0.030 | 0.766 |
+| Q5 (nonzero, uncertain) | 0.0–0.7 | 154 | 54.5% | **0.755** ±0.039 | 0.688 |
+
+Q1−Q5 gap = **0.243** — 4× the heuristic-stratified gap. Effect is dramatic and monotonic across all 20 (layer × K%) configs without exception.
+
+**Interpretation:** Sycophancy IS encoded in residual stream activations (overall AUROC 0.91). But the decodability depends sharply on the model's prior confidence:
+- **Confident sycophancy** (zero token entropy): probe is essentially perfect (AUROC 0.998). The model "knew" its answer, then deliberately overrode it under persona pressure → sharp activation signature.
+- **Uncertain sycophancy** (high token entropy): probe drops to 0.755. The model was already balancing both options; the persona-induced switch looks computationally similar to ordinary deliberation → activations sit near the decision boundary.
+
+This is the *opposite* of the naïve "uncertain → vulnerability with bright neural signal" hypothesis. Uncertainty doesn't amplify the sycophantic signal — it **blurs its decodability**. The two metrics agree on direction but token entropy reveals the effect 4× more strongly, and validates the finding on a principled measure rather than a hand-crafted heuristic.
+
+Two qualitatively distinct sycophancy regimes therefore appear plausible:
+1. **Confident override** — internal answer is crisp, sycophancy is a deliberate switch with a clear neural footprint.
+2. **Uncertain drift** — internal state is balanced, sycophancy is a smooth tilt toward the persona-favored option indistinguishable in activations from honest reasoning.
+
+A natural follow-up is whether a probe trained only on confident records *transfers* to uncertain ones (Exp 5: cross-prediction) — if not, this is computational evidence for two distinct mechanisms.
 
 ### Experiment 4: Probe Confidence Trajectories by Uncertainty Group
 
