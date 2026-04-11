@@ -115,17 +115,37 @@ Difference D1→D10: +19.5 p.p., nearly 2×. D7 (33.8%) breaks strict monotonici
 
 **Question:** Can probes detect sycophancy equally well across uncertainty levels?
 
-**Prerequisites:** Run activation extraction (Phase 2) on all 5100 questions.
+**Setup:** Linear probes (StandardScaler + LogisticRegression, C=1) on mean-pooled residual stream activations from Qwen3-14B intervention responses. Sweep over layers [10, 20, 30, 35] × thinking truncation K% [10, 25, 50, 75, 100]. 5096 records, stratified split 70/15/15 (train=3565, val=761, test=770).
 
-**Method:**
-- Train linear probe on ALL data (sycophantic vs not)
-- Evaluate separately per uncertainty quintile
-- Compare AUROC across quintiles
+**Probe sweep — Test AUROC by (layer × K%):**
 
-**Possible outcomes:**
-- Same AUROC everywhere → probe sees one mechanism regardless of uncertainty
-- Higher AUROC on uncertain → stronger signal when model "surrenders"
-- Lower AUROC on uncertain → uncertain sycophancy is more subtle
+| Layer \ K% | K10 | K25 | K50 | K75 | K100 |
+|---|---|---|---|---|---|
+| L10 | 0.7424 | 0.7732 | 0.8268 | 0.8497 | 0.8716 |
+| L20 | 0.8435 | 0.8554 | 0.8771 | 0.8913 | 0.9038 |
+| L30 | 0.8217 | 0.8512 | 0.8837 | 0.8976 | **0.9093** |
+| L35 | 0.8129 | 0.8393 | 0.8800 | 0.8863 | 0.9016 |
+
+- AUROC monotonically increases with K% across all layers → sycophancy crystallizes towards the end of reasoning, not in the first tokens.
+- L20/L30/L35 are close (~0.90); L10 lags (~0.87 max). Best: **L30 K100 = 0.9093**.
+
+**Best probe (L30 K100) stratified by uncertainty quintile (test set):**
+
+| Q | Range | N | Pos% | AUROC | Acc |
+|---|---|---|---|---|---|
+| Q1 (most confident) | 1.2-4.4 | 150 | 35.3% | **0.949** ±0.016 | 0.860 |
+| Q2 | 4.4-5.5 | 158 | 33.5% | 0.918 ±0.021 | 0.829 |
+| Q3 | 5.5-6.7 | 149 | 49.0% | 0.893 ±0.026 | 0.799 |
+| Q4 | 6.7-8.0 | 118 | 42.4% | 0.893 ±0.030 | 0.814 |
+| Q5 (most uncertain) | 8.0-18.0 | 195 | 48.2% | **0.888** ±0.023 | 0.800 |
+
+**Result:** AUROC monotonically **decreases** as uncertainty rises. Q1−Q5 gap = 0.061 (~3 SE). The trend is robust — Q1 > Q5 in nearly all 20 (layer × K%) configs, not just the best one.
+
+**Interpretation:** Sycophancy IS encoded in residual stream activations (overall AUROC 0.91). But on confident examples, the sycophantic switch leaves a sharper neural trace — the probe separates them cleanly. On uncertain examples, the activations sit closer to the decision boundary and the probe loses ~6 AUROC points. Two regimes appear plausible:
+- **Confident sycophancy** — model deliberately overrides its prior, leaving a distinct activation signature.
+- **Uncertain sycophancy** — transition is smoother, harder to distinguish from honest deliberation.
+
+This is the *opposite* of the naïve "uncertain → vulnerability with bright signal" hypothesis. Uncertainty doesn't amplify the sycophantic signal; it blurs its decodability.
 
 ### Experiment 4: Probe Confidence Trajectories by Uncertainty Group
 
