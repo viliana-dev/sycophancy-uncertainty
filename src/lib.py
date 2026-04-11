@@ -207,6 +207,162 @@ def find_thinking_span(
     return full_ids, start_idx, end_idx
 
 
+# ---------------------------------------------------------------------------
+# Harmony (gpt-oss-20b) helpers — parallel to the Qwen versions above.
+#
+# The harmony chat format uses explicit channels:
+#   <|start|>system<|message|>…<|end|>
+#   <|start|>user<|message|>…<|end|>
+#   <|start|>assistant<|channel|>analysis<|message|>THINKING<|end|>
+#   <|start|>assistant<|channel|>final<|message|>ANSWER<|return|>
+#
+# apply_chat_template(..., add_generation_prompt=True) ends with
+# '<|start|>assistant' (no open channel). The model then emits the
+# analysis channel, closes it with <|end|>, and re-opens with a new
+# assistant message on the final channel.
+# ---------------------------------------------------------------------------
+
+HARMONY_ANALYSIS_OPEN = "<|channel|>analysis<|message|>"
+HARMONY_FINAL_OPEN = "<|channel|>final<|message|>"
+HARMONY_END = "<|end|>"
+HARMONY_RETURN = "<|return|>"
+HARMONY_ASSISTANT_START = "<|start|>assistant"
+HARMONY_DEFAULT_REASONING_EFFORT = "medium"
+
+
+def load_model_gptoss(model_name: str, device: str = "cuda"):
+    """Load gpt-oss model. Requires attn_implementation='eager' — sdpa not
+    supported by GptOssForCausalLM yet. Returns (model, tokenizer, num_layers)."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    print(f"Loading model: {model_name}")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        dtype=torch.bfloat16,
+        device_map=device,
+        trust_remote_code=True,
+        attn_implementation="eager",
+    )
+    model.eval()
+    num_layers = len(model.model.layers)
+    print(f"Model loaded on {device}, {model.config.hidden_size}d, {num_layers} layers")
+    return model, tokenizer, num_layers
+
+
+def apply_chat_template_harmony(
+    tokenizer, prompt: str,
+    reasoning_effort: str = HARMONY_DEFAULT_REASONING_EFFORT,
+) -> str:
+    """Apply harmony chat template with given reasoning_effort.
+
+    Note: harmony auto-injects a 'You are ChatGPT…' system prompt that
+    includes 'Reasoning: <effort>' and the channel list. We do not pass a
+    custom system role because it interacts unpredictably with the built-in
+    system block; if needed, a future refactor can switch to openai-harmony's
+    encoder for full control.
+    """
+    messages = [{"role": "user", "content": prompt}]
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True,
+        reasoning_effort=reasoning_effort,
+    )
+
+
+def apply_chat_template_messages_harmony(
+    tokenizer, messages: list[dict],
+    reasoning_effort: str = HARMONY_DEFAULT_REASONING_EFFORT,
+) -> str:
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True,
+        reasoning_effort=reasoning_effort,
+    )
+
+
+def parse_thinking_answer_harmony(text: str) -> tuple[str, str]:
+    """Split a harmony assistant response into (thinking, answer).
+
+    Handles three cases:
+      1. Complete: analysis channel + <|end|> + assistant re-open + final channel + <|return|>
+      2. Truncated mid-analysis: no <|end|> — return what we have as thinking, empty answer
+      3. Truncated mid-final: analysis is complete but answer has no <|return|>
+    """
+    thinking = ""
+    answer = ""
+
+    an_start = text.find(HARMONY_ANALYSIS_OPEN)
+    if an_start != -1:
+        content_start = an_start + len(HARMONY_ANALYSIS_OPEN)
+        an_end = text.find(HARMONY_END, content_start)
+        if an_end == -1:
+            return text[content_start:].strip(), ""
+        thinking = text[content_start:an_end].strip()
+
+    fn_start = text.find(HARMONY_FINAL_OPEN)
+    if fn_start != -1:
+        content_start = fn_start + len(HARMONY_FINAL_OPEN)
+        # Answer ends at <|return|> (EOS) or <|end|> (whichever comes first).
+        fn_end = text.find(HARMONY_RETURN, content_start)
+        fn_end_alt = text.find(HARMONY_END, content_start)
+        if fn_end == -1:
+            fn_end = fn_end_alt
+        elif fn_end_alt != -1 and fn_end_alt < fn_end:
+            fn_end = fn_end_alt
+        if fn_end == -1:
+            answer = text[content_start:].strip()
+        else:
+            answer = text[content_start:fn_end].strip()
+
+    return thinking, answer
+
+
+def build_full_text_harmony(
+    tokenizer, prompt: str, thinking: str, answer: str,
+    reasoning_effort: str = HARMONY_DEFAULT_REASONING_EFFORT,
+) -> str:
+    """Reconstruct the full text for a known (thinking, answer) pair.
+
+    Shape:
+        <template ending with '<|start|>assistant'>
+        <|channel|>analysis<|message|>THINKING<|end|>
+        <|start|>assistant<|channel|>final<|message|>ANSWER<|return|>
+    """
+    prefix = apply_chat_template_harmony(tokenizer, prompt, reasoning_effort)
+    return (
+        prefix
+        + HARMONY_ANALYSIS_OPEN + thinking + HARMONY_END
+        + HARMONY_ASSISTANT_START + HARMONY_FINAL_OPEN + answer + HARMONY_RETURN
+    )
+
+
+def find_analysis_span_harmony(
+    tokenizer, prompt: str, thinking: str,
+    reasoning_effort: str = HARMONY_DEFAULT_REASONING_EFFORT,
+) -> tuple[torch.Tensor, int, int]:
+    """Build prompt + analysis-channel + thinking + <|end|> and return
+    (full_ids, start_idx, end_idx) covering only the thinking-content tokens
+    (excluding the channel-open marker and the <|end|> closer).
+
+    Mirrors find_thinking_span for the Qwen path.
+    """
+    prefix = apply_chat_template_harmony(tokenizer, prompt, reasoning_effort)
+
+    prefix_with_open = prefix + HARMONY_ANALYSIS_OPEN
+    prefix_with_thinking = prefix_with_open + thinking
+    full_text = prefix_with_thinking + HARMONY_END
+
+    ids_prefix_open = tokenizer(prefix_with_open, return_tensors="pt")["input_ids"]
+    ids_prefix_thinking = tokenizer(prefix_with_thinking, return_tensors="pt")["input_ids"]
+    full_ids = tokenizer(full_text, return_tensors="pt")["input_ids"]
+
+    start_idx = ids_prefix_open.shape[1]
+    end_idx = ids_prefix_thinking.shape[1]
+    if end_idx <= start_idx:
+        end_idx = start_idx + 1
+
+    return full_ids, start_idx, end_idx
+
+
 def find_thinking_span_messages(
     tokenizer, messages: list[dict], thinking: str,
 ) -> tuple[torch.Tensor, int, int]:

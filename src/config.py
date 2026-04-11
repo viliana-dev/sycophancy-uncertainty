@@ -44,6 +44,22 @@ HEAD_DIM = 128
 # Layer fractions → layer indices for 40-layer model: [10, 20, 30, 35]
 DEFAULT_LAYER_FRACS = [0.25, 0.5, 0.75, 0.875]
 
+# ---------------------------------------------------------------------------
+# Replication model: openai/gpt-oss-20b (harmony chat format, MoE 32×4)
+# 24 layers, hidden_size=2880. Default reasoning_effort=medium for primary
+# replication (apples-to-apples with Qwen3-14B's default thinking depth).
+# ---------------------------------------------------------------------------
+
+GPTOSS_MODEL = "openai/gpt-oss-20b"
+GPTOSS_NUM_LAYERS = 24
+GPTOSS_HIDDEN_SIZE = 2880
+# Same fraction grid → indices [6, 12, 18, 21]
+GPTOSS_LAYER_FRACS = [0.25, 0.5, 0.75, 0.875]
+GPTOSS_DEFAULT_REASONING_EFFORT = "medium"
+
+# Suffix for all gpt-oss output dirs so we never collide with Qwen data.
+GPTOSS_DATA_SUFFIX = "_gptoss"
+
 # Truncation points for probe evaluation (% of CoT)
 TRUNCATION_POINTS = [10, 25, 50, 75, 100]
 
