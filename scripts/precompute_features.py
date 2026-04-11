@@ -1,10 +1,9 @@
 """Precompute mean-pooled features from activation files.
 
-Bottleneck discovered: /dev/vda is a rotational HDD, so 48 parallel random
-reads cause seek thrashing. Strategy:
-  - Sort files by inode so reads are near-sequential on disk.
-  - One thread reads raw bytes serially.
-  - Thread pool decompresses in parallel (zlib/np.load release the GIL).
+Uses multiprocessing Pool. Each worker gets a contiguous slice of files
+sorted by inode (sequential-ish on HDD) and processes them independently.
+This gets real parallelism (unlike threads, since np.load holds the GIL
+during zlib decompression).
 
 Output: data/features/sycophancy/L{layer}_K{k}.npz
         keys: 'X' (n, 5120), 'qids' (n,)
@@ -14,10 +13,9 @@ Usage:
 """
 
 import argparse
-import io
+import multiprocessing as mp
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -40,23 +38,34 @@ from src.lib import (
 )
 
 
-def decompress_and_pool(
-    raw: bytes, layer_indices: list[int], k_percents: list[float]
-) -> dict[tuple[int, float], np.ndarray] | None:
+_LAYER_INDICES: list[int] = []
+_K_PERCENTS: list[float] = []
+
+
+def _init_worker(layer_indices, k_percents):
+    global _LAYER_INDICES, _K_PERCENTS
+    _LAYER_INDICES = layer_indices
+    _K_PERCENTS = k_percents
+
+
+def worker(indexed_path) -> tuple[int, dict[tuple[int, float], np.ndarray] | None]:
+    i, p = indexed_path
     try:
-        npz = np.load(io.BytesIO(raw))
+        npz = np.load(p)
         files = set(npz.files)
-        needed = {f"layer_{idx}" for idx in layer_indices}
+        needed = {f"layer_{idx}" for idx in _LAYER_INDICES}
         if not needed.issubset(files):
-            return None
+            npz.close()
+            return (i, None)
         out: dict[tuple[int, float], np.ndarray] = {}
-        for layer in layer_indices:
+        for layer in _LAYER_INDICES:
             arr = npz[f"layer_{layer}"].astype(np.float32)
-            for k in k_percents:
+            for k in _K_PERCENTS:
                 out[(layer, k)] = mean_pool_at_percent(arr, k)
-        return out
+        npz.close()
+        return (i, out)
     except Exception:
-        return None
+        return (i, None)
 
 
 def main():
@@ -69,7 +78,7 @@ def main():
 
     print(f"Layers: {layer_indices}", flush=True)
     print(f"K%: {k_percents}", flush=True)
-    print(f"Decomp workers: {args.n_workers}", flush=True)
+    print(f"Workers: {args.n_workers}", flush=True)
 
     labeled_path = GENERATED_DIR / "sycophancy" / "labeled.jsonl"
     records = list(read_jsonl(labeled_path))
@@ -88,41 +97,28 @@ def main():
             matrices[(layer, k)] = np.zeros((n, 5120), dtype=np.float32)
     valid_mask = np.zeros(n, dtype=bool)
 
-    # Sort indices by inode to minimize HDD seek
+    # Build (i, path) list of existing files, sort by inode for near-sequential HDD reads
     paths = [cache_dir / f"{q}.npz" for q in qids]
-    existing = [(i, p) for i, p in enumerate(paths) if p.exists()]
-    missing = n - len(existing)
+    indexed = [(i, p) for i, p in enumerate(paths) if p.exists()]
+    missing = n - len(indexed)
     print(f"Missing files: {missing}", flush=True)
 
-    existing.sort(key=lambda ip: os.stat(ip[1]).st_ino)
+    indexed.sort(key=lambda ip: os.stat(ip[1]).st_ino)
+    print(f"Sorted by inode", flush=True)
+    print(f"Launching {args.n_workers} workers", flush=True)
 
-    # One reader thread streams bytes; pool decompresses.
-    with ThreadPoolExecutor(max_workers=args.n_workers) as pool:
-        pending: list[tuple[int, object]] = []
-        pbar = tqdm(total=len(existing), desc="precompute", unit="ex", mininterval=2.0)
-
-        MAX_INFLIGHT = args.n_workers * 4
-
-        def drain_one():
-            nonlocal pending
-            i, fut = pending.pop(0)
-            feats = fut.result()
+    with mp.Pool(
+        processes=args.n_workers,
+        initializer=_init_worker,
+        initargs=(layer_indices, k_percents),
+    ) as pool:
+        pbar = tqdm(total=len(indexed), desc="precompute", unit="ex", mininterval=5.0)
+        for i, feats in pool.imap_unordered(worker, indexed, chunksize=8):
             if feats is not None:
                 valid_mask[i] = True
                 for key, vec in feats.items():
                     matrices[key][i] = vec
             pbar.update(1)
-
-        for i, p in existing:
-            with open(p, "rb") as f:
-                raw = f.read()
-            fut = pool.submit(decompress_and_pool, raw, layer_indices, k_percents)
-            pending.append((i, fut))
-            while len(pending) >= MAX_INFLIGHT:
-                drain_one()
-
-        while pending:
-            drain_one()
         pbar.close()
 
     print(f"\nLoaded: {valid_mask.sum()}/{n}, missing: {n - valid_mask.sum()}", flush=True)
