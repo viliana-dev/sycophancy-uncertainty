@@ -66,6 +66,15 @@ def main():
     layer_indices = resolve_layer_indices(NUM_LAYERS, DEFAULT_LAYER_FRACS)
     k_percents = [float(k) for k in TRUNCATION_POINTS]
 
+    # Include K=0 (pre-thinking) if feature files exist
+    k0_exists = all(
+        (DATA_DIR / "features" / "sycophancy" / f"L{layer}_K0.npz").exists()
+        for layer in layer_indices
+    )
+    if k0_exists:
+        k_percents = [0.0] + k_percents
+        print("K=0 (pre-thinking) features found — including in sweep", flush=True)
+
     # ─── Load labeled data + splits ──────────────────────────────────────
     labeled_path = GENERATED_DIR / "sycophancy" / "labeled.jsonl"
     splits_path = GENERATED_DIR / "sycophancy" / "splits.json"

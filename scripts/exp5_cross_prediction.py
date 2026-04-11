@@ -194,7 +194,8 @@ def main():
             "entropy", entropy_lookup, X, qids, rec_lookup, splits,
         )
 
-    out_path = RESULTS_DIR / "exp5_cross_prediction.json"
+    suffix = f"_K{args.k}" if args.k != BEST_K else ""
+    out_path = RESULTS_DIR / f"exp5_cross_prediction{suffix}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
