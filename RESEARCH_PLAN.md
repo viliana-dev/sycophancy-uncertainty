@@ -192,19 +192,43 @@ A natural follow-up is whether a probe trained only on confident records *transf
 
 Different trajectory shapes = different decision dynamics = publishable finding.
 
-### Experiment 5: Cross-Prediction (One Mechanism or Two?)
+### Experiment 5: Cross-Prediction (One Mechanism or Two?) (DONE)
 
 **Question:** Is uncertainty-driven sycophancy the same computational mechanism as confident sycophancy?
 
-**Method:**
-- Probe A: trained only on confident samples (uncertainty < median)
-- Probe B: trained only on uncertain samples (uncertainty > median)
-- Cross-evaluate: A on uncertain test set, B on confident test set
-- Compare with cosine similarity of weight vectors
+**Method:** Split trainval by median uncertainty (computed on trainval only to avoid test leakage). Train two probes on the best (layer, K%) config from Exp 3 (L30, K100): A on the confident half, B on the uncertain half. Evaluate each on both test halves. Run twice: once with the lexical heuristic, once with token entropy.
 
-**Interpretation:**
-- High cross-AUROC + high cosine → one mechanism, uncertainty just amplifies it
-- Low cross-AUROC + low cosine → two distinct pathways
+**Result — HEURISTIC split (median = 6.0):**
+
+| Train→Test | N test | AUROC | Acc |
+|---|---|---|---|
+| conf→conf | 432 | 0.906 ±0.014 | 0.843 |
+| unc→unc | 338 | 0.890 ±0.016 | 0.781 |
+| conf→unc | 338 | 0.724 ±0.030 | 0.698 |
+| unc→conf | 432 | 0.783 ±0.022 | 0.725 |
+
+Drops: conf→unc −0.18, unc→conf −0.11. Roughly symmetric — both halves lose substantial generalization, so under the lexical metric the picture is blurred.
+
+**Result — TOKEN ENTROPY split (median ≈ 1e-4):**
+
+| Train→Test | N test | AUROC | Acc |
+|---|---|---|---|
+| conf→conf | 392 | **0.966** ±0.009 | 0.903 |
+| unc→unc | 378 | 0.812 ±0.022 | 0.725 |
+| conf→unc | 378 | 0.720 ±0.026 | 0.648 |
+| unc→conf | 392 | **0.805** ±0.022 | 0.755 |
+
+Drops: conf→unc **−0.247**, unc→conf **−0.007**. The asymmetry is the headline finding. The confident-only probe collapses on uncertain records (−0.25), while the uncertain-only probe transfers to confident records with essentially zero loss (0.805 vs unc-baseline 0.812).
+
+**Interpretation — two mechanisms, one contained in the other:**
+
+1. **Confident sycophancy carries an extra sharp signature** that only exists in the confident regime — a crisp "I knew the answer, now I'm overriding it" direction. The uncertain probe never sees this and therefore never learns it, which is why conf→unc drops so dramatically: the feature that drove conf→conf's 0.966 doesn't exist in uncertain activations.
+
+2. **Uncertain sycophancy's probe captures a more general, weaker direction** that happens to also be present in confident records. Confident sycophancy is so easy that even this weaker direction suffices (0.805 AUROC). But the reverse does not hold — the sharp confident feature is absent when the model was already balancing options, so the confident probe has nothing to grab onto.
+
+This is asymmetric subset-of, not "one mechanism + noise". Confident sycophancy = *general drift* + *sharp override signature*; uncertain sycophancy = *general drift only*. The entropy metric exposes this cleanly because it actually separates the two regimes; the heuristic (more symmetric drops) correlates with uncertainty but doesn't carve the population at its true joint, so the confident-only half still contains many high-entropy cases and vice versa.
+
+**Paper-relevant takeaway:** there are computationally distinct sycophancy pathways, and the confident one is the one that produces the dramatic AUROC 0.998 finding from Exp 3. Any mitigation that targets only the sharp "override" direction (e.g. activation steering in Exp 6) will likely fix confident sycophancy but leave uncertain drift untouched.
 
 ### Experiment 6 (Stretch): Intervention Restores Uncertainty Expression
 
