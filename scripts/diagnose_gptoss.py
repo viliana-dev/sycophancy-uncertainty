@@ -44,7 +44,7 @@ def main():
         dtype=torch.bfloat16,
         device_map="cuda",
         trust_remote_code=True,
-        attn_implementation="sdpa",
+        attn_implementation="eager",
     )
     model.eval()
 
