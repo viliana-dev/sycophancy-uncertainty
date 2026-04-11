@@ -1,5 +1,7 @@
 """Experiment 3: Activation probes stratified by uncertainty.
 
+Uses precomputed features (run scripts/precompute_features.py first).
+
 Questions:
 1. Can a linear probe detect sycophancy from activations? (overall AUROC)
 2. Does probe performance differ across uncertainty levels?
@@ -8,8 +10,8 @@ Questions:
    - Same AUROC → one mechanism regardless of uncertainty
 
 Usage:
+    python scripts/precompute_features.py   # one-time: ~30 min
     python scripts/exp3_probe_by_uncertainty.py
-    python scripts/exp3_probe_by_uncertainty.py --layer-fracs 0.5 0.75
 """
 
 import argparse
@@ -18,114 +20,50 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-from tqdm import tqdm
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
-    ACTIVATIONS_DIR,
+    DATA_DIR,
     DEFAULT_LAYER_FRACS,
     GENERATED_DIR,
     NUM_LAYERS,
     RESULTS_DIR,
     TRUNCATION_POINTS,
 )
-from src.evaluate import bootstrap_auroc_se, compute_auroc
-from src.lib import load_activations, mean_pool_at_percent, read_jsonl, resolve_layer_indices
-from src.probes.linear import sweep_linear_split
+from src.evaluate import bootstrap_auroc_se, compute_auroc, compute_gmean2
+from src.lib import read_jsonl, resolve_layer_indices
 
 
-def load_all_activations(
-    qids: list[str], layer_indices: list[int],
-) -> dict[str, dict[int, np.ndarray]]:
-    """Load activations for all question IDs."""
-    cache_dir = ACTIVATIONS_DIR / "sycophancy"
-    activations = {}
-    missing = 0
-    for qid in tqdm(qids, desc="loading activations", unit="ex"):
-        acts = load_activations(cache_dir / f"{qid}.npz", layer_indices)
-        if acts is not None:
-            activations[qid] = acts
-        else:
-            missing += 1
-    print(f"Loaded activations: {len(activations)}/{len(qids)} ({missing} missing)", flush=True)
-    return activations
-
-
-def evaluate_on_subset(
-    pipeline,
-    activations: dict[str, dict[int, np.ndarray]],
-    records: list[dict],
-    layer_idx: int | str,
-    layer_indices: list[int],
-    k_pct: float,
-) -> dict | None:
-    """Evaluate a trained probe on a subset of records.
-
-    Returns dict with auroc, auroc_se, accuracy, n, n_pos, n_neg.
-    """
-    valid = [r for r in records if r["question_id"] in activations]
-    if len(valid) < 10:
-        return None
-
-    labels = np.array([int(r["label"]) for r in valid])
-    if len(np.unique(labels)) < 2:
-        return None
-
-    if layer_idx == "all":
-        X = np.stack([
-            np.concatenate([
-                mean_pool_at_percent(
-                    activations[r["question_id"]][l].astype(np.float32), k_pct
-                )
-                for l in layer_indices
-            ])
-            for r in valid
-        ])
-    else:
-        X = np.stack([
-            mean_pool_at_percent(
-                activations[r["question_id"]][layer_idx].astype(np.float32), k_pct
-            )
-            for r in valid
-        ])
-
-    probs = pipeline.predict_proba(X)[:, 1]
-    preds = pipeline.predict(X)
-
-    auroc = compute_auroc(labels, probs)
-    auroc_se = bootstrap_auroc_se(labels, probs)
-    accuracy = float((preds == labels).mean())
-
-    return {
-        "auroc": round(auroc, 4),
-        "auroc_se": round(auroc_se, 4),
-        "accuracy": round(accuracy, 4),
-        "n": len(valid),
-        "n_pos": int(labels.sum()),
-        "n_neg": int((1 - labels).sum()),
-        "pos_rate": round(float(labels.mean()), 4),
-    }
+def load_features(layer: int, k_pct: float) -> tuple[np.ndarray, np.ndarray]:
+    """Load precomputed (X, qids) for a single (layer, K%) config."""
+    feat_dir = DATA_DIR / "features" / "sycophancy"
+    npz = np.load(feat_dir / f"L{layer}_K{int(k_pct)}.npz")
+    X = npz["X"]
+    qids = npz["qids"]
+    npz.close()
+    return X, qids
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--layer-fracs", nargs="+", type=float, default=None)
-    parser.add_argument("--k-percents", nargs="+", type=float, default=None)
     parser.add_argument("--n-quintiles", type=int, default=5)
+    parser.add_argument("--C", type=float, default=1.0)
     args = parser.parse_args()
 
-    layer_indices = resolve_layer_indices(NUM_LAYERS, args.layer_fracs)
-    k_percents = args.k_percents or [float(k) for k in TRUNCATION_POINTS]
+    layer_indices = resolve_layer_indices(NUM_LAYERS, DEFAULT_LAYER_FRACS)
+    k_percents = [float(k) for k in TRUNCATION_POINTS]
 
     # ─── Load labeled data + splits ──────────────────────────────────────
     labeled_path = GENERATED_DIR / "sycophancy" / "labeled.jsonl"
     splits_path = GENERATED_DIR / "sycophancy" / "splits.json"
 
     if not labeled_path.exists() or not splits_path.exists():
-        print("Run extraction first: python -m src.extract --device cuda")
-        print("This creates labeled.jsonl and splits.json")
+        print("Run prepare_labeled.py first")
         return
 
     records = list(read_jsonl(labeled_path))
@@ -134,127 +72,156 @@ def main():
 
     rec_lookup = {r["question_id"]: r for r in records}
 
-    print(f"Loaded {len(records)} labeled records")
-    print(f"  Sycophantic: {sum(r['label'] for r in records)} ({100*sum(r['label'] for r in records)/len(records):.1f}%)")
+    n_syco = sum(r["label"] for r in records)
+    print(f"Loaded {len(records)} labeled records ({n_syco} syco, {100*n_syco/len(records):.1f}%)", flush=True)
 
-    # ─── Load activations ────────────────────────────────────────────────
-    all_qids = [r["question_id"] for r in records]
-    activations = load_all_activations(all_qids, layer_indices)
+    train_set = set(splits["train"])
+    val_set = set(splits["val"])
+    test_set = set(splits["test"])
 
-    if len(activations) < 100:
-        print("Too few activations. Run extraction first.")
-        return
+    # ─── Sweep all (layer, K%) configs ───────────────────────────────────
+    print(f"\n=== Training linear probes ===", flush=True)
+    print(f"{'Config':<14} {'TestAUROC':<12} {'Acc':<8} {'gmean2':<8}", flush=True)
+    print("-" * 45, flush=True)
 
-    # ─── Train probes on full dataset ────────────────────────────────────
-    print("\n=== Training linear probes (full dataset) ===")
-    probe_results = sweep_linear_split(
-        activations, records, splits, layer_indices, k_percents,
-    )
+    probe_results = {}  # {(layer, k): {pipe, test_auroc, ...}}
+    test_qid_lookup = {}  # cache of test qids per (layer, k)
 
-    # Find best config
+    for layer in layer_indices:
+        for k in k_percents:
+            X, qids = load_features(layer, k)
+
+            # Build splits using qid index
+            qid_to_idx = {q: i for i, q in enumerate(qids)}
+
+            train_idx = [qid_to_idx[q] for q in splits["train"] if q in qid_to_idx]
+            val_idx = [qid_to_idx[q] for q in splits["val"] if q in qid_to_idx]
+            test_idx = [qid_to_idx[q] for q in splits["test"] if q in qid_to_idx]
+            trainval_idx = train_idx + val_idx
+
+            y = np.array([rec_lookup[q]["label"] for q in qids])
+
+            X_tv = X[trainval_idx]
+            y_tv = y[trainval_idx]
+            X_test = X[test_idx]
+            y_test = y[test_idx]
+
+            pipe = Pipeline([
+                ("scaler", StandardScaler()),
+                ("lr", LogisticRegression(C=args.C, max_iter=1000, solver="lbfgs")),
+            ])
+            pipe.fit(X_tv, y_tv)
+
+            test_probs = pipe.predict_proba(X_test)[:, 1]
+            test_preds = pipe.predict(X_test)
+            test_auroc = compute_auroc(y_test, test_probs)
+            test_acc = float((test_preds == y_test).mean())
+            test_g2 = compute_gmean2(y_test, test_preds)
+
+            probe_results[(layer, k)] = {
+                "pipe": pipe,
+                "test_auroc": round(test_auroc, 4),
+                "test_accuracy": round(test_acc, 4),
+                "test_gmean2": round(test_g2, 4),
+                "test_qids": np.array([qids[i] for i in test_idx]),
+                "test_probs": test_probs,
+                "test_labels": y_test,
+            }
+
+            print(f"L{layer}_K{int(k)}    {test_auroc:.4f}      {test_acc:.4f}  {test_g2:.4f}", flush=True)
+
+    # Best config
     best_key = max(probe_results, key=lambda k: probe_results[k]["test_auroc"])
     best = probe_results[best_key]
-    print(f"\nBest config: layer={best_key[0]}, K={best_key[1]}%")
-    print(f"  test_auroc={best['test_auroc']:.4f}, acc={best['test_accuracy']:.4f}")
+    print(f"\nBest: L{best_key[0]} K{int(best_key[1])}: AUROC={best['test_auroc']:.4f}", flush=True)
 
-    # ─── Stratify by uncertainty quintiles ────────────────────────────────
-    print(f"\n=== Evaluating per uncertainty quintile (N={args.n_quintiles}) ===")
+    # ─── Stratify best probe by uncertainty quintiles ────────────────────
+    print(f"\n=== Best probe per uncertainty quintile ===", flush=True)
 
-    # Get uncertainty scores
-    uncertainties = np.array([
-        rec_lookup[qid]["uncertainty_score"]
-        for qid in splits["test"]
-        if qid in rec_lookup and qid in activations
-    ])
-    test_qids = [
-        qid for qid in splits["test"]
-        if qid in rec_lookup and qid in activations
-    ]
+    test_qids = best["test_qids"]
+    test_probs = best["test_probs"]
+    test_labels = best["test_labels"]
 
-    quintile_edges = np.percentile(uncertainties, np.linspace(0, 100, args.n_quintiles + 1))
-    quintile_labels = np.digitize(uncertainties, quintile_edges[1:-1])  # 0 to n-1
+    uncertainties = np.array([rec_lookup[q]["uncertainty_score"] for q in test_qids])
+    edges = np.percentile(uncertainties, np.linspace(0, 100, args.n_quintiles + 1))
+    quintile_labels = np.digitize(uncertainties, edges[1:-1])
 
-    print(f"\n{'Quintile':<10} {'Range':<20} {'N':<6} {'Pos%':<8} {'AUROC':<12} {'Acc':<8}")
-    print("-" * 65)
+    print(f"{'Quintile':<10} {'Range':<18} {'N':<6} {'Pos%':<8} {'AUROC':<14} {'Acc':<8}", flush=True)
+    print("-" * 65, flush=True)
 
     quintile_results = {}
-
     for q_idx in range(args.n_quintiles):
         mask = quintile_labels == q_idx
-        q_qids = [qid for qid, m in zip(test_qids, mask) if m]
-        q_records = [rec_lookup[qid] for qid in q_qids if qid in rec_lookup]
-
-        # Evaluate best probe on this subset
-        best_layer, best_k = best_key
-        pipeline = probe_results[best_key]["pipeline"]
-
-        result = evaluate_on_subset(
-            pipeline, activations, q_records, best_layer, layer_indices, best_k,
-        )
-
-        if result is None:
-            print(f"Q{q_idx+1:<9} (too few samples or single class)")
+        n = mask.sum()
+        if n < 10:
             continue
+        labels_q = test_labels[mask]
+        probs_q = test_probs[mask]
+
+        if len(np.unique(labels_q)) < 2:
+            print(f"Q{q_idx+1:<9} (single class)", flush=True)
+            continue
+
+        auroc = compute_auroc(labels_q, probs_q)
+        auroc_se = bootstrap_auroc_se(labels_q, probs_q, n_boot=500)
+        preds_q = (probs_q >= 0.5).astype(int)
+        acc = float((preds_q == labels_q).mean())
+        pos_rate = float(labels_q.mean())
 
         lo = uncertainties[mask].min()
         hi = uncertainties[mask].max()
         print(
-            f"Q{q_idx+1:<9} {lo:.1f}-{hi:.1f}{'':<12} "
-            f"{result['n']:<6} {result['pos_rate']:.1%}{'':<4} "
-            f"{result['auroc']:.4f}±{result['auroc_se']:.4f} "
-            f"{result['accuracy']:.4f}"
+            f"Q{q_idx+1:<9} {lo:.1f}-{hi:.1f}{'':<10} "
+            f"{n:<6} {pos_rate:.1%}{'':<4} "
+            f"{auroc:.4f}±{auroc_se:.4f}  {acc:.4f}",
+            flush=True,
         )
-
         quintile_results[f"Q{q_idx+1}"] = {
-            **result,
+            "n": int(n),
+            "n_pos": int(labels_q.sum()),
+            "pos_rate": round(pos_rate, 4),
+            "auroc": round(auroc, 4),
+            "auroc_se": round(auroc_se, 4),
+            "accuracy": round(acc, 4),
             "uncertainty_range": [float(lo), float(hi)],
         }
 
-    # ─── Evaluate all configs per quintile (detailed) ─────────────────────
-    print(f"\n=== Detailed: AUROC per (layer, K%) per quintile ===")
+    # ─── Detailed: AUROC per (layer, K) per quintile ─────────────────────
+    print(f"\n=== AUROC per (layer, K%) per quintile ===", flush=True)
+    header = f"{'Config':<14} {'Overall':<10}"
+    for q_idx in range(args.n_quintiles):
+        header += f"{'Q'+str(q_idx+1):<10}"
+    print(header, flush=True)
+    print("-" * (14 + 10 + 10 * args.n_quintiles), flush=True)
 
     detailed = {}
-    for (layer_idx, k_pct), res in sorted(probe_results.items()):
-        if not isinstance(layer_idx, int):
-            continue  # skip "all" for detailed view
+    for (layer, k), res in sorted(probe_results.items()):
+        row = f"L{layer}_K{int(k):<10}"[:14] + f" {res['test_auroc']:<10.4f}"
+        config_data = {"overall": res["test_auroc"]}
 
-        pipeline = res["pipeline"]
-        row = {"overall_test_auroc": res["test_auroc"]}
+        # Use the same test set ordering (per probe)
+        t_qids = res["test_qids"]
+        t_probs = res["test_probs"]
+        t_labels = res["test_labels"]
+        t_unc = np.array([rec_lookup[q]["uncertainty_score"] for q in t_qids])
+        t_quintile = np.digitize(t_unc, edges[1:-1])  # use same edges as best
 
         for q_idx in range(args.n_quintiles):
-            mask = quintile_labels == q_idx
-            q_qids = [qid for qid, m in zip(test_qids, mask) if m]
-            q_records = [rec_lookup[qid] for qid in q_qids if qid in rec_lookup]
-
-            sub = evaluate_on_subset(
-                pipeline, activations, q_records, layer_idx, layer_indices, k_pct,
-            )
-            if sub:
-                row[f"Q{q_idx+1}_auroc"] = sub["auroc"]
-
-        detailed[f"L{layer_idx}_K{k_pct}"] = row
-
-    # Print summary table
-    print(f"\n{'Config':<15} {'Overall':<10}", end="")
-    for q_idx in range(args.n_quintiles):
-        print(f"{'Q'+str(q_idx+1):<10}", end="")
-    print()
-    print("-" * (15 + 10 + 10 * args.n_quintiles))
-
-    for config_name, row in sorted(detailed.items()):
-        print(f"{config_name:<15} {row['overall_test_auroc']:<10.4f}", end="")
-        for q_idx in range(args.n_quintiles):
-            key = f"Q{q_idx+1}_auroc"
-            if key in row:
-                print(f"{row[key]:<10.4f}", end="")
+            mask = t_quintile == q_idx
+            if mask.sum() < 10 or len(np.unique(t_labels[mask])) < 2:
+                row += f"{'N/A':<10}"
+                config_data[f"Q{q_idx+1}"] = None
             else:
-                print(f"{'N/A':<10}", end="")
-        print()
+                auroc = compute_auroc(t_labels[mask], t_probs[mask])
+                row += f"{auroc:<10.4f}"
+                config_data[f"Q{q_idx+1}"] = round(auroc, 4)
+
+        print(row, flush=True)
+        detailed[f"L{layer}_K{int(k)}"] = config_data
 
     # ─── Save results ─────────────────────────────────────────────────────
     out = {
         "n_records": len(records),
-        "n_activations": len(activations),
         "layer_indices": layer_indices,
         "k_percents": k_percents,
         "best_config": {
@@ -264,18 +231,23 @@ def main():
             "test_accuracy": best["test_accuracy"],
         },
         "probe_results": {
-            f"{k[0]}|{k[1]}": {kk: vv for kk, vv in v.items() if kk != "pipeline"}
+            f"L{k[0]}_K{int(k[1])}": {
+                "test_auroc": v["test_auroc"],
+                "test_accuracy": v["test_accuracy"],
+                "test_gmean2": v["test_gmean2"],
+            }
             for k, v in probe_results.items()
         },
         "quintile_results": quintile_results,
         "detailed_by_quintile": detailed,
+        "uncertainty_edges": edges.tolist(),
     }
 
     out_path = RESULTS_DIR / "exp3_probe_by_uncertainty.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nSaved to {out_path}")
+    print(f"\nSaved to {out_path}", flush=True)
 
 
 if __name__ == "__main__":
