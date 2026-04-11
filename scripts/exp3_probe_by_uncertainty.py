@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -42,13 +43,13 @@ def load_all_activations(
     cache_dir = ACTIVATIONS_DIR / "sycophancy"
     activations = {}
     missing = 0
-    for qid in qids:
+    for qid in tqdm(qids, desc="loading activations", unit="ex"):
         acts = load_activations(cache_dir / f"{qid}.npz", layer_indices)
         if acts is not None:
             activations[qid] = acts
         else:
             missing += 1
-    print(f"Loaded activations: {len(activations)}/{len(qids)} ({missing} missing)")
+    print(f"Loaded activations: {len(activations)}/{len(qids)} ({missing} missing)", flush=True)
     return activations
 
 
