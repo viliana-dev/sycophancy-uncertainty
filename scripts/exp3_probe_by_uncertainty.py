@@ -53,6 +53,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-quintiles", type=int, default=5)
     parser.add_argument("--C", type=float, default=1.0)
+    parser.add_argument(
+        "--uncertainty-source", choices=["heuristic", "entropy"], default="heuristic",
+        help="heuristic: lexical score from labeled.jsonl; entropy: answer_entropy.jsonl",
+    )
+    parser.add_argument(
+        "--stratify", choices=["percentile", "rank"], default="percentile",
+        help="rank uses ordinal ranks (good when scores have many ties, e.g. token entropy)",
+    )
     args = parser.parse_args()
 
     layer_indices = resolve_layer_indices(NUM_LAYERS, DEFAULT_LAYER_FRACS)
@@ -74,6 +82,22 @@ def main():
 
     n_syco = sum(r["label"] for r in records)
     print(f"Loaded {len(records)} labeled records ({n_syco} syco, {100*n_syco/len(records):.1f}%)", flush=True)
+
+    # Optionally override uncertainty_score with token entropy
+    if args.uncertainty_source == "entropy":
+        ent_path = GENERATED_DIR / "sycophancy" / "answer_entropy.jsonl"
+        if not ent_path.exists():
+            print(f"Missing {ent_path} — run compute_answer_entropy.py first")
+            return
+        ent_lookup = {}
+        for rec in read_jsonl(ent_path):
+            ent_lookup[rec["question_id"]] = rec["entropy"]
+        n_overridden = 0
+        for qid, r in rec_lookup.items():
+            if qid in ent_lookup:
+                r["uncertainty_score"] = ent_lookup[qid]
+                n_overridden += 1
+        print(f"Override uncertainty_score with answer entropy: {n_overridden}/{len(rec_lookup)}", flush=True)
 
     train_set = set(splits["train"])
     val_set = set(splits["val"])
@@ -143,8 +167,16 @@ def main():
     test_labels = best["test_labels"]
 
     uncertainties = np.array([rec_lookup[q]["uncertainty_score"] for q in test_qids])
-    edges = np.percentile(uncertainties, np.linspace(0, 100, args.n_quintiles + 1))
-    quintile_labels = np.digitize(uncertainties, edges[1:-1])
+    if args.stratify == "rank":
+        order = uncertainties.argsort()
+        ranks = np.empty_like(order)
+        ranks[order] = np.arange(len(order))
+        quintile_labels = (ranks * args.n_quintiles // len(uncertainties)).clip(0, args.n_quintiles - 1)
+        edges = np.array([uncertainties[order[int(i * len(order) / args.n_quintiles)]]
+                          for i in range(args.n_quintiles)] + [uncertainties.max()])
+    else:
+        edges = np.percentile(uncertainties, np.linspace(0, 100, args.n_quintiles + 1))
+        quintile_labels = np.digitize(uncertainties, edges[1:-1])
 
     print(f"{'Quintile':<10} {'Range':<18} {'N':<6} {'Pos%':<8} {'AUROC':<14} {'Acc':<8}", flush=True)
     print("-" * 65, flush=True)
@@ -204,7 +236,13 @@ def main():
         t_probs = res["test_probs"]
         t_labels = res["test_labels"]
         t_unc = np.array([rec_lookup[q]["uncertainty_score"] for q in t_qids])
-        t_quintile = np.digitize(t_unc, edges[1:-1])  # use same edges as best
+        if args.stratify == "rank":
+            t_order = t_unc.argsort()
+            t_ranks = np.empty_like(t_order)
+            t_ranks[t_order] = np.arange(len(t_order))
+            t_quintile = (t_ranks * args.n_quintiles // len(t_unc)).clip(0, args.n_quintiles - 1)
+        else:
+            t_quintile = np.digitize(t_unc, edges[1:-1])  # use same edges as best
 
         for q_idx in range(args.n_quintiles):
             mask = t_quintile == q_idx
@@ -243,7 +281,12 @@ def main():
         "uncertainty_edges": edges.tolist(),
     }
 
-    out_path = RESULTS_DIR / "exp3_probe_by_uncertainty.json"
+    out_name = "exp3_probe_by_uncertainty"
+    if args.uncertainty_source != "heuristic":
+        out_name += f"_{args.uncertainty_source}"
+    if args.stratify != "percentile":
+        out_name += f"_{args.stratify}"
+    out_path = RESULTS_DIR / f"{out_name}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
