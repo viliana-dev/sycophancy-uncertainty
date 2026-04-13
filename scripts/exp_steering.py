@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import (
     DATA_DIR, GENERATED_DIR, PLOTS_DIR, RESULTS_DIR, SUBJECT_MODEL,
 )
+from src.datasets import load_sycophancy_questions
 from src.lib import (
     apply_chat_template,
     load_model,
@@ -148,6 +149,10 @@ def compute_directions(feat_dir, gen_dir):
     with open(gen_dir / "splits.json") as f:
         splits = json.load(f)
 
+    # Load source questions for answer_matching_behavior
+    questions = load_sycophancy_questions()
+    amb_lookup = {q.question_id: q.answer_matching_behavior for q in questions}
+
     # Entropy
     ent_path = gen_dir / "answer_entropy.jsonl"
     if ent_path.exists():
@@ -216,11 +221,11 @@ def compute_directions(feat_dir, gen_dir):
         else:
             test_groups[q] = "unc_syco"
 
-    return directions, rec_lookup, test_qids, test_groups, median
+    return directions, rec_lookup, test_qids, test_groups, median, amb_lookup
 
 
 def run_config(model, tokenizer, device, direction_name, direction_tensor,
-               alpha, rec_lookup, test_qids, test_groups, out_dir):
+               alpha, rec_lookup, test_qids, test_groups, amb_lookup, out_dir):
     """Run one (direction, alpha) config over all test records."""
     tag = f"{direction_name}_a{alpha}"
     out_path = out_dir / f"{tag}.jsonl"
@@ -253,7 +258,7 @@ def run_config(model, tokenizer, device, direction_name, direction_tensor,
             parsed = parse_ab_answer(answer)
 
             # Check if sycophantic
-            amb = rec["answer_matching_behavior"].strip()
+            amb = amb_lookup.get(q, "").strip()
             is_syco = parsed is not None and f"({parsed})" == amb
 
             result = {
@@ -437,7 +442,7 @@ def main():
 
     # ── Compute directions (CPU) ─────────────────────────────────────────
     print("Computing steering directions...", flush=True)
-    directions, rec_lookup, test_qids, test_groups, median = compute_directions(
+    directions, rec_lookup, test_qids, test_groups, median, amb_lookup = compute_directions(
         feat_dir, gen_dir,
     )
     print(f"Test records: {len(test_qids)}, median: {median:.6f}", flush=True)
@@ -491,7 +496,7 @@ def main():
         run_config(
             model, tokenizer, device,
             direction_name, direction_tensor, alpha,
-            rec_lookup, test_qids, test_groups, out_dir,
+            rec_lookup, test_qids, test_groups, amb_lookup, out_dir,
         )
         torch.cuda.empty_cache()
 
