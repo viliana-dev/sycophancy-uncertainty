@@ -271,6 +271,111 @@ This is asymmetric subset-of, not "one mechanism + noise". Confident sycophancy 
 
 **Paper-relevant takeaway:** there are computationally distinct sycophancy pathways, and the confident one is the one that produces the dramatic AUROC 0.998 finding from Exp 3. Any mitigation that targets only the sharp "override" direction (e.g. activation steering in Exp 6) will likely fix confident sycophancy but leave uncertain drift untouched.
 
+---
+
+## Replication: gpt-oss-20b
+
+**Model:** gpt-oss-20b (24 layers, 2880 hidden, MoE 32×4 = 3.6B active params). Harmony chat format with `<|channel|>analysis` (thinking) and `<|channel|>final` (answer). reasoning_effort=medium.
+
+**Data:** Same 5100 questions. 4092 labeled records (80.2% parse rate), 30.9% sycophancy rate (vs Qwen's 41.9%). 1008 skipped: essay-style answers ("The answer depends on...") and refusals — gpt-oss is less formulaic in answer formatting.
+
+### Exp 3 gptoss: Probes by Uncertainty
+
+**Best config: L12_K100, AUROC = 0.9091** — identical to Qwen's 0.9093.
+
+Probe sweep (test AUROC):
+
+| Layer \ K% | K10 | K25 | K50 | K75 | K100 |
+|---|---|---|---|---|---|
+| L6 | 0.767 | 0.767 | 0.821 | 0.848 | 0.864 |
+| L12 | 0.805 | 0.820 | 0.857 | 0.872 | **0.909** |
+| L18 | 0.811 | 0.836 | 0.843 | 0.867 | 0.908 |
+| L21 | 0.796 | 0.812 | 0.836 | 0.857 | 0.897 |
+
+Same monotonic K-improvement, similar layer pattern (mid-layers best).
+
+**K0 pre-thinking (probe trained on K0 features separately):**
+
+| Layer | K0 AUROC |
+|---|---|
+| L6 | 0.772 |
+| L12 | 0.776 |
+| L18 | **0.810** |
+| L21 | 0.795 |
+
+**K0 AUROC = 0.81 (L18)** — comparable to Qwen (0.79 at L30). Sycophancy signal exists before reasoning in both architectures.
+
+K0 by entropy quintile (L18): Q1=0.874, Q2=0.819, Q3=0.787, Q4=0.706, Q5=0.774. Mild confident→uncertain gradient at K0 (same direction as Qwen but weaker).
+
+**Entropy-stratified quintiles (rank-based, L12 K100):**
+
+| Q | N | Pos% | AUROC |
+|---|---|---|---|
+| Q1 (lowest entropy) | 124 | 15.3% | 0.901 |
+| Q2 | 124 | 21.8% | 0.918 |
+| Q3 | 124 | 32.3% | 0.922 |
+| Q4 | 124 | 25.8% | 0.868 |
+| Q5 (highest entropy) | 124 | 59.7% | 0.890 |
+
+**Q1−Q5 gap = 0.011** — essentially flat. This is the KEY difference from Qwen (gap = 0.243). gpt-oss does NOT show the confident→uncertain AUROC degradation that Qwen shows. The probe works equally well across all entropy quintiles.
+
+**Interpretation:** gpt-oss appears to use a single, more uniform sycophancy mechanism that doesn't vary with uncertainty. The MoE architecture and/or RLHF training may produce a more homogeneous representation — sycophancy "looks the same" whether the model was confident or not.
+
+### Exp 4 gptoss: Trajectories (token-entropy grouping)
+
+| Group | N | K10 | K25 | K50 | K75 | K100 |
+|---|---|---|---|---|---|---|
+| confident + non-syco | 258 | 0.258 | 0.182 | 0.139 | 0.119 | 0.090 |
+| confident + syco | 74 | 0.500 | 0.496 | 0.548 | 0.674 | 0.741 |
+| uncertain + non-syco | 170 | 0.464 | 0.318 | 0.197 | 0.172 | 0.151 |
+| uncertain + syco | 118 | 0.639 | 0.613 | 0.677 | 0.684 | 0.721 |
+
+Same 4 trajectory shapes as Qwen: steep descent (conf-nonsyco), fast commit (conf-syco), gentle descent (unc-nonsyco), flat drift (unc-syco). The uncertain-syco trajectory is again nearly horizontal (0.64→0.72, Δ=0.08). Despite the flat Exp 3 quintile gradient, the trajectory shapes replicate.
+
+Syco−nonsyco gap at K100: confident **+0.651**, uncertain **+0.570** (Qwen: +0.748 / +0.468). The gap ratio is smaller (1.14× vs 1.60× for Qwen) — consistent with more uniform mechanism.
+
+### Exp 5 gptoss: Cross-Prediction
+
+**Heuristic split:**
+
+| Train→Test | AUROC | Drop |
+|---|---|---|
+| conf→conf | 0.954 | — |
+| unc→unc | 0.888 | — |
+| conf→unc | 0.704 | −0.250 |
+| unc→conf | 0.659 | −0.229 |
+
+**Entropy split:**
+
+| Train→Test | AUROC | Drop |
+|---|---|---|
+| conf→conf | 0.934 | — |
+| unc→unc | 0.910 | — |
+| conf→unc | 0.635 | **−0.299** |
+| unc→conf | 0.687 | **−0.223** |
+
+Both directions lose ~0.25. This is SYMMETRIC — unlike Qwen where unc→conf had essentially zero drop (−0.007). In gpt-oss, the uncertain-trained probe does NOT transfer to confident records, meaning the uncertain regime captures different features that aren't present in the confident regime either.
+
+**Interpretation:** gpt-oss shows **mutual non-transferability** rather than Qwen's **asymmetric containment**. Neither regime's probe transfers well to the other. This could mean gpt-oss has two genuinely distinct mechanisms (vs Qwen's "one contained in the other"), or that the MoE routing creates different feature subspaces for different uncertainty levels.
+
+### Cross-Model Comparison Summary
+
+| Finding | Qwen3-14B | gpt-oss-20b |
+|---|---|---|
+| Best AUROC | 0.909 (L30 K100) | 0.909 (L12 K100) |
+| K0 pre-thinking AUROC | 0.790 (L30) | 0.810 (L18) |
+| Sycophancy rate | 41.9% | 30.9% |
+| Entropy Q1−Q5 AUROC gap | **0.243** (dramatic) | **0.011** (flat) |
+| Trajectory shapes | 4 distinct ✓ | 4 distinct ✓ |
+| Cross-prediction (entropy) | asymmetric (conf⊃unc) | symmetric (mutual drop) |
+| Uncertain syco trajectory | flat drift ✓ | flat drift ✓ |
+
+**What replicates:** Overall probe accuracy (0.91), 4 trajectory shapes, uncertain-syco flat drift, sycophancy signal from K10.
+
+**What differs:** Qwen shows sharp confident/uncertain bifurcation in probe quality and asymmetric transfer; gpt-oss shows uniform probe quality and symmetric non-transfer. The sycophancy-uncertainty relationship is architecture-dependent — but the core finding (sycophancy is detectable and mechanistically different across uncertainty levels) holds in both.
+
+---
+
 ### Experiment 6 (Stretch): Intervention Restores Uncertainty Expression
 
 **Question:** Can we reverse sycophancy by subtracting the "agreement direction" from activations?

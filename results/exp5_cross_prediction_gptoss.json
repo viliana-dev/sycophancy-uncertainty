@@ -1,0 +1,88 @@
+{
+  "layer": 18,
+  "k_pct": 100,
+  "by_metric": {
+    "heuristic": {
+      "median": 0.915,
+      "n_train_conf": 1744,
+      "n_train_unc": 1728,
+      "n_test_conf": 317,
+      "n_test_unc": 303,
+      "results": {
+        "conf->conf": {
+          "auroc": 0.9537,
+          "auroc_se": 0.0123,
+          "accuracy": 0.9148,
+          "n": 317,
+          "n_pos": 81
+        },
+        "unc->unc": {
+          "auroc": 0.8875,
+          "auroc_se": 0.0204,
+          "accuracy": 0.8416,
+          "n": 303,
+          "n_pos": 111
+        },
+        "conf->unc": {
+          "auroc": 0.7043,
+          "auroc_se": 0.0342,
+          "accuracy": 0.703,
+          "n": 303,
+          "n_pos": 111
+        },
+        "unc->conf": {
+          "auroc": 0.6585,
+          "auroc_se": 0.0336,
+          "accuracy": 0.5899,
+          "n": 317,
+          "n_pos": 81
+        }
+      },
+      "generalization_drops": {
+        "conf_to_unc": 0.2495,
+        "unc_to_conf": 0.2291
+      }
+    },
+    "entropy": {
+      "median": 7.99289906370511e-05,
+      "n_train_conf": 1762,
+      "n_train_unc": 1710,
+      "n_test_conf": 332,
+      "n_test_unc": 288,
+      "results": {
+        "conf->conf": {
+          "auroc": 0.9343,
+          "auroc_se": 0.0168,
+          "accuracy": 0.9036,
+          "n": 332,
+          "n_pos": 74
+        },
+        "unc->unc": {
+          "auroc": 0.9099,
+          "auroc_se": 0.0177,
+          "accuracy": 0.8333,
+          "n": 288,
+          "n_pos": 118
+        },
+        "conf->unc": {
+          "auroc": 0.6348,
+          "auroc_se": 0.0343,
+          "accuracy": 0.6285,
+          "n": 288,
+          "n_pos": 118
+        },
+        "unc->conf": {
+          "auroc": 0.6865,
+          "auroc_se": 0.034,
+          "accuracy": 0.6355,
+          "n": 332,
+          "n_pos": 74
+        }
+      },
+      "generalization_drops": {
+        "conf_to_unc": 0.2994,
+        "unc_to_conf": 0.2234
+      }
+    }
+  }
+}
