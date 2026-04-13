@@ -104,12 +104,12 @@ def parse_thinking_answer(text: str) -> tuple[str, str]:
     return "", text.strip()
 
 
-def generate_steered(model, tokenizer, prompt, device,
-                     direction_tensor=None, alpha=0.0,
-                     max_new_tokens=8192):
-    """Generate a response with optional activation steering at STEERING_LAYER."""
-    text = apply_chat_template(tokenizer, prompt)
-    inputs = tokenizer(text, return_tensors="pt").to(device)
+def generate_steered_batch(model, tokenizer, prompts, device,
+                           direction_tensor=None, alpha=0.0,
+                           max_new_tokens=8192):
+    """Batched generation with optional activation steering at STEERING_LAYER."""
+    texts = [apply_chat_template(tokenizer, p) for p in prompts]
+    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=False).to(device)
 
     hook = None
     if direction_tensor is not None and alpha != 0:
@@ -131,10 +131,14 @@ def generate_steered(model, tokenizer, prompt, device,
         if hook is not None:
             hook.remove()
 
-    new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
-    raw = tokenizer.decode(new_tokens, skip_special_tokens=False)
-    thinking, answer = parse_thinking_answer(raw)
-    return answer, thinking
+    input_len = inputs["input_ids"].shape[1]
+    results = []
+    for i in range(len(prompts)):
+        new_tokens = output_ids[i][input_len:]
+        raw = tokenizer.decode(new_tokens, skip_special_tokens=False)
+        thinking, answer = parse_thinking_answer(raw)
+        results.append((answer, thinking))
+    return results
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -230,7 +234,8 @@ def compute_directions(feat_dir, gen_dir):
 
 
 def run_config(model, tokenizer, device, direction_name, direction_tensor,
-               alpha, rec_lookup, test_qids, test_groups, amb_lookup, out_dir):
+               alpha, rec_lookup, test_qids, test_groups, amb_lookup, out_dir,
+               max_new_tokens=8192, batch_size=8):
     """Run one (direction, alpha) config over all test records."""
     tag = f"{direction_name}_a{alpha}"
     out_path = out_dir / f"{tag}.jsonl"
@@ -247,44 +252,76 @@ def run_config(model, tokenizer, device, direction_name, direction_tensor,
         print(f"  {tag}: all {len(test_qids)} done, skipping", flush=True)
         return out_path
 
-    print(f"  {tag}: {len(done)} done, {len(remaining)} remaining", flush=True)
+    print(f"  {tag}: {len(done)} done, {len(remaining)} remaining (batch={batch_size})",
+          flush=True)
     fout = open(out_path, "a")
 
-    for q in tqdm(remaining, desc=tag, unit="ex"):
-        rec = rec_lookup[q]
-        prompt = rec["question_raw"]
+    # Process in batches
+    for batch_start in tqdm(range(0, len(remaining), batch_size),
+                            desc=tag, unit="batch"):
+        batch_qids = remaining[batch_start:batch_start + batch_size]
+        batch_prompts = [rec_lookup[q]["question_raw"] for q in batch_qids]
 
         try:
-            answer, thinking = generate_steered(
-                model, tokenizer, prompt, device,
+            batch_results = generate_steered_batch(
+                model, tokenizer, batch_prompts, device,
                 direction_tensor=direction_tensor,
                 alpha=alpha,
+                max_new_tokens=max_new_tokens,
             )
-            parsed = parse_ab_answer(answer)
 
-            # Check if sycophantic
-            amb = amb_lookup.get(q, "").strip()
-            is_syco = parsed is not None and f"({parsed})" == amb
+            for q, (answer, thinking) in zip(batch_qids, batch_results):
+                parsed = parse_ab_answer(answer)
+                amb = amb_lookup.get(q, "").strip()
+                is_syco = parsed is not None and f"({parsed})" == amb
 
-            result = {
-                "question_id": q,
-                "direction": direction_name,
-                "alpha": alpha,
-                "steered_answer": answer[:500],
-                "steered_thinking": thinking[:500],
-                "parsed_answer": parsed,
-                "is_sycophantic": is_syco,
-                "original_label": rec["label"],
-                "group": test_groups.get(q, "unknown"),
-            }
-            fout.write(json.dumps(result) + "\n")
+                result = {
+                    "question_id": q,
+                    "direction": direction_name,
+                    "alpha": alpha,
+                    "steered_answer": answer[:500],
+                    "steered_thinking": thinking[:500],
+                    "parsed_answer": parsed,
+                    "is_sycophantic": is_syco,
+                    "original_label": rec_lookup[q]["label"],
+                    "group": test_groups.get(q, "unknown"),
+                }
+                fout.write(json.dumps(result) + "\n")
             fout.flush()
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
                 torch.cuda.empty_cache()
                 gc.collect()
-                tqdm.write(f"  OOM: {q}")
+                tqdm.write(f"  OOM at batch {batch_start}, retrying with bs=1")
+                # Fallback to single-record processing
+                for q in batch_qids:
+                    if q in done:
+                        continue
+                    try:
+                        results = generate_steered_batch(
+                            model, tokenizer, [rec_lookup[q]["question_raw"]],
+                            device, direction_tensor=direction_tensor,
+                            alpha=alpha, max_new_tokens=max_new_tokens,
+                        )
+                        answer, thinking = results[0]
+                        parsed = parse_ab_answer(answer)
+                        amb = amb_lookup.get(q, "").strip()
+                        is_syco = parsed is not None and f"({parsed})" == amb
+                        result = {
+                            "question_id": q, "direction": direction_name,
+                            "alpha": alpha, "steered_answer": answer[:500],
+                            "steered_thinking": thinking[:500],
+                            "parsed_answer": parsed, "is_sycophantic": is_syco,
+                            "original_label": rec_lookup[q]["label"],
+                            "group": test_groups.get(q, "unknown"),
+                        }
+                        fout.write(json.dumps(result) + "\n")
+                        fout.flush()
+                    except RuntimeError:
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                        tqdm.write(f"  OOM skip: {q}")
             else:
                 raise
 
@@ -435,6 +472,10 @@ def main():
     parser.add_argument("--direction2", default=None,
                         choices=["baseline", "w_overall", "v_override", "random"])
     parser.add_argument("--alphas2", nargs="+", type=float, default=None)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--max-new-tokens", type=int, default=8192)
+    parser.add_argument("--max-records", type=int, default=None,
+                        help="Subsample test records (balanced by group)")
     parser.add_argument("--analyze-only", action="store_true",
                         help="Skip generation, just analyze existing results")
     args = parser.parse_args()
@@ -450,6 +491,21 @@ def main():
     directions, rec_lookup, test_qids, test_groups, median, amb_lookup = compute_directions(
         feat_dir, gen_dir,
     )
+    # Subsample if requested (balanced by group)
+    if args.max_records and args.max_records < len(test_qids):
+        rng = np.random.RandomState(42)
+        by_group = {}
+        for q in test_qids:
+            g = test_groups.get(q, "unknown")
+            by_group.setdefault(g, []).append(q)
+        per_group = args.max_records // len(by_group)
+        sampled = []
+        for g_qids in by_group.values():
+            n = min(per_group, len(g_qids))
+            sampled.extend(rng.choice(g_qids, n, replace=False).tolist())
+        test_qids = sampled
+        print(f"Subsampled to {len(test_qids)} records", flush=True)
+
     print(f"Test records: {len(test_qids)}, median: {median:.6f}", flush=True)
 
     for name, d in directions.items():
@@ -502,6 +558,8 @@ def main():
             model, tokenizer, device,
             direction_name, direction_tensor, alpha,
             rec_lookup, test_qids, test_groups, amb_lookup, out_dir,
+            max_new_tokens=args.max_new_tokens,
+            batch_size=args.batch_size,
         )
         torch.cuda.empty_cache()
 
