@@ -31,9 +31,9 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
-    DATA_DIR, GENERATED_DIR, PLOTS_DIR, RESULTS_DIR, SUBJECT_MODEL,
+    ANTHROPIC_EVALS_DIR, DATA_DIR, GENERATED_DIR, PLOTS_DIR, RESULTS_DIR,
+    SUBJECT_MODEL,
 )
-from src.datasets import load_sycophancy_questions
 from src.lib import (
     apply_chat_template,
     load_model,
@@ -149,9 +149,14 @@ def compute_directions(feat_dir, gen_dir):
     with open(gen_dir / "splits.json") as f:
         splits = json.load(f)
 
-    # Load source questions for answer_matching_behavior
-    questions = load_sycophancy_questions()
-    amb_lookup = {q.question_id: q.answer_matching_behavior for q in questions}
+    # Load answer_matching_behavior from source files
+    amb_lookup = {}
+    for fname in ANTHROPIC_EVALS_DIR.glob("sycophancy_on_*.jsonl"):
+        source_name = fname.stem
+        for i, line in enumerate(open(fname)):
+            rec = json.loads(line.strip())
+            qid = f"{source_name}_{i:05d}"
+            amb_lookup[qid] = rec["answer_matching_behavior"]
 
     # Entropy
     ent_path = gen_dir / "answer_entropy.jsonl"
