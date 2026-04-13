@@ -446,7 +446,57 @@ Cohen's d:
 
 3. **gpt-oss (MoE):** The two axes swap dominance: v_override dominates confident (d=1.86) while w_unc dominates uncertain (d=1.71). Each regime "lives" on its own vector. Neither probe transfers because each relies on the axis that is weak in the other regime. This explains the symmetric cross-prediction drop.
 
-4. **Architecture hypothesis:** In Dense networks, uncertain activations still pass through the same parameters that encode v_override, leaving a residual trace (d=0.78). In MoE networks, the router may steer uncertain tokens through different experts, physically isolating them from the v_override subspace (d=0.37, nearly 5× weaker than Dense).
+4. **Architecture hypothesis:** In Dense networks, uncertain activations still pass through the same parameters that encode v_override, leaving a residual trace (d=0.78). In MoE networks, different expert routing could physically isolate uncertain tokens from the v_override subspace (d=0.37, nearly 5× weaker than Dense). → **Tested in MoE Routing Analysis below.**
+
+### MoE Routing Analysis (DONE — NULL RESULT)
+
+**Question:** Does the gpt-oss-20b router assign different experts to confident vs uncertain records? Could physical expert isolation explain the symmetric cross-prediction failure?
+
+**Method:** Register forward hooks on all 24 layer routers (`model.model.layers[i].mlp.router`). For each test record (N=620), run a single forward pass and record top-4 expert assignments for thinking tokens only. Aggregate per-layer expert frequency vectors (32-dim, normalized). Compare distributions across 4 groups via Jensen-Shannon divergence, Jaccard overlap of top-8 dominant experts, and routing entropy.
+
+**Group sizes:** conf_nonsyco=258, conf_syco=74, unc_nonsyco=170, unc_syco=118.
+
+**Result — Jensen-Shannon divergence (mean across 24 layers):**
+
+| Comparison | Mean JS Divergence |
+|---|---|
+| Confident vs Uncertain | **0.00074** |
+| Syco vs Non-syco | **0.00100** |
+
+Both are negligible (max possible JS = ln(2) ≈ 0.693). Per-layer JS ranges from 0.0002 to 0.0016 — noise-level variation with no systematic trend across layers.
+
+**Result — Jaccard overlap (top-8 experts per group):**
+
+| Comparison | Mean Jaccard |
+|---|---|
+| Confident vs Uncertain | **0.935** |
+| Syco vs Non-syco | **0.926** |
+
+Most layers show Jaccard = 1.0 (identical top-8 expert sets). The occasional 0.778 = 7/9 (one expert swapped) appears sporadically with no layer-dependent pattern.
+
+**Result — Mean routing entropy (averaged over 24 layers):**
+
+| Group | Routing Entropy |
+|---|---|
+| Confident + Non-syco | 2.734 |
+| Confident + Syco | 2.717 |
+| Uncertain + Non-syco | 2.727 |
+| Uncertain + Syco | 2.723 |
+
+All groups have essentially identical routing entropy (~2.73 nats). No group uses a more concentrated or diffuse expert subset.
+
+**Interpretation — the routing hypothesis is WRONG:**
+
+The MoE router assigns the **same experts** to confident and uncertain records. The symmetric cross-prediction failure in gpt-oss is **not** caused by physical expert isolation. All four groups pass through the same expert subsets with indistinguishable frequency distributions.
+
+This means the architecture-dependent difference between Qwen and gpt-oss must arise from **within-expert computation**, not routing:
+- The MoE experts' internal weights produce different activation subspaces for confident vs uncertain inputs (explaining v_override d=1.86→0.37 collapse)
+- But the *selection* of which experts process each token is identical
+- The router operates on a pre-MoE hidden state that apparently does not encode uncertainty strongly enough to affect routing decisions
+
+**Revised architecture hypothesis:** MoE creates different activation subspaces within the same expert set. Each expert has the capacity to process both confident and uncertain inputs, but the internal computation (gating weights, intermediate representations) produces regime-specific features. This is a subtler form of specialization than physical routing — the experts are shared infrastructure, but the function they compute is input-dependent.
+
+**Paper implication:** §5 should frame the MoE story as "shared experts, divergent computations" rather than "different expert pathways." The null routing result strengthens the main narrative: sycophancy is not a surface-level routing artifact but a deep computational phenomenon embedded within the expert MLPs themselves.
 
 ---
 
