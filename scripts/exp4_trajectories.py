@@ -61,7 +61,7 @@ def main():
     suffix = "_gptoss" if is_gptoss else ""
     feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
     gen_dir = GENERATED_DIR / f"sycophancy{suffix}"
-    best_layer = best_layer or (BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER_QWEN)
+    best_layer = args.layer or (BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER_QWEN)
 
     # ─── Load features for all K at the chosen layer ─────────────────────
     feats: dict[int, np.ndarray] = {}
