@@ -31,6 +31,8 @@ from src.config import (
     DATA_DIR,
     DEFAULT_LAYER_FRACS,
     GENERATED_DIR,
+    GPTOSS_LAYER_FRACS,
+    GPTOSS_NUM_LAYERS,
     NUM_LAYERS,
     RESULTS_DIR,
     TRUNCATION_POINTS,
@@ -39,9 +41,8 @@ from src.evaluate import bootstrap_auroc_se, compute_auroc, compute_gmean2
 from src.lib import read_jsonl, resolve_layer_indices
 
 
-def load_features(layer: int, k_pct: float) -> tuple[np.ndarray, np.ndarray]:
+def load_features(feat_dir, layer: int, k_pct: float) -> tuple[np.ndarray, np.ndarray]:
     """Load precomputed (X, qids) for a single (layer, K%) config."""
-    feat_dir = DATA_DIR / "features" / "sycophancy"
     npz = np.load(feat_dir / f"L{layer}_K{int(k_pct)}.npz")
     X = npz["X"]
     qids = npz["qids"]
@@ -61,14 +62,23 @@ def main():
         "--stratify", choices=["percentile", "rank"], default="percentile",
         help="rank uses ordinal ranks (good when scores have many ties, e.g. token entropy)",
     )
+    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
     args = parser.parse_args()
 
-    layer_indices = resolve_layer_indices(NUM_LAYERS, DEFAULT_LAYER_FRACS)
+    is_gptoss = args.model_family == "gptoss"
+    suffix = "_gptoss" if is_gptoss else ""
+    feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
+    gen_dir = GENERATED_DIR / f"sycophancy{suffix}"
+
+    if is_gptoss:
+        layer_indices = resolve_layer_indices(GPTOSS_NUM_LAYERS, GPTOSS_LAYER_FRACS)
+    else:
+        layer_indices = resolve_layer_indices(NUM_LAYERS, DEFAULT_LAYER_FRACS)
     k_percents = [float(k) for k in TRUNCATION_POINTS]
 
     # Include K=0 (pre-thinking) if feature files exist
     k0_exists = all(
-        (DATA_DIR / "features" / "sycophancy" / f"L{layer}_K0.npz").exists()
+        (feat_dir / f"L{layer}_K0.npz").exists()
         for layer in layer_indices
     )
     if k0_exists:
@@ -76,8 +86,8 @@ def main():
         print("K=0 (pre-thinking) features found — including in sweep", flush=True)
 
     # ─── Load labeled data + splits ──────────────────────────────────────
-    labeled_path = GENERATED_DIR / "sycophancy" / "labeled.jsonl"
-    splits_path = GENERATED_DIR / "sycophancy" / "splits.json"
+    labeled_path = gen_dir / "labeled.jsonl"
+    splits_path = gen_dir / "splits.json"
 
     if not labeled_path.exists() or not splits_path.exists():
         print("Run prepare_labeled.py first")
@@ -94,7 +104,7 @@ def main():
 
     # Optionally override uncertainty_score with token entropy
     if args.uncertainty_source == "entropy":
-        ent_path = GENERATED_DIR / "sycophancy" / "answer_entropy.jsonl"
+        ent_path = gen_dir / "answer_entropy.jsonl"
         if not ent_path.exists():
             print(f"Missing {ent_path} — run compute_answer_entropy.py first")
             return
@@ -122,7 +132,7 @@ def main():
 
     for layer in layer_indices:
         for k in k_percents:
-            X, qids = load_features(layer, k)
+            X, qids = load_features(feat_dir, layer, k)
 
             # Build splits using qid index
             qid_to_idx = {q: i for i, q in enumerate(qids)}
@@ -291,6 +301,8 @@ def main():
     }
 
     out_name = "exp3_probe_by_uncertainty"
+    if is_gptoss:
+        out_name += "_gptoss"
     if args.uncertainty_source != "heuristic":
         out_name += f"_{args.uncertainty_source}"
     if args.stratify != "percentile":

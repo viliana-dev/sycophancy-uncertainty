@@ -33,17 +33,17 @@ from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import DATA_DIR, GENERATED_DIR, RESULTS_DIR
-from src.lib import read_jsonl
+from src.config import DATA_DIR, GENERATED_DIR, GPTOSS_LAYER_FRACS, GPTOSS_NUM_LAYERS, RESULTS_DIR
+from src.lib import read_jsonl, resolve_layer_indices
 
 
-BEST_LAYER = 30
+BEST_LAYER_QWEN = 30
+BEST_LAYER_GPTOSS = 18  # ~0.75 of 24 layers
 REF_K = 100
 K_POINTS_THINKING = [10, 25, 50, 75, 100]
 
 
-def load_features(layer: int, k_pct: int) -> tuple[np.ndarray, np.ndarray]:
-    feat_dir = DATA_DIR / "features" / "sycophancy"
+def load_features(feat_dir, layer: int, k_pct: int) -> tuple[np.ndarray, np.ndarray]:
     npz = np.load(feat_dir / f"L{layer}_K{k_pct}.npz")
     X = npz["X"]
     qids = npz["qids"]
@@ -53,24 +53,31 @@ def load_features(layer: int, k_pct: int) -> tuple[np.ndarray, np.ndarray]:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--layer", type=int, default=BEST_LAYER)
+    parser.add_argument("--layer", type=int, default=None)
+    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
     args = parser.parse_args()
+
+    is_gptoss = args.model_family == "gptoss"
+    suffix = "_gptoss" if is_gptoss else ""
+    feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
+    gen_dir = GENERATED_DIR / f"sycophancy{suffix}"
+    best_layer = best_layer or (BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER_QWEN)
 
     # ─── Load features for all K at the chosen layer ─────────────────────
     feats: dict[int, np.ndarray] = {}
     qids_ref = None
 
     # K=0 (pre-thinking) if available
-    k0_path = DATA_DIR / "features" / "sycophancy" / f"L{args.layer}_K0.npz"
+    k0_path = feat_dir / f"L{best_layer}_K0.npz"
     has_k0 = k0_path.exists()
     if has_k0:
-        X0, qids0 = load_features(args.layer, 0)
+        X0, qids0 = load_features(feat_dir, best_layer, 0)
         qids_ref = qids0
         feats[0] = X0
         print(f"Loaded K=0 (pre-thinking) features: {X0.shape}", flush=True)
 
     for k in K_POINTS_THINKING:
-        X, qids = load_features(args.layer, k)
+        X, qids = load_features(feat_dir, best_layer, k)
         if qids_ref is None:
             qids_ref = qids
         else:
@@ -79,16 +86,16 @@ def main():
 
     K_POINTS = ([0] if has_k0 else []) + K_POINTS_THINKING
     qid_to_idx = {q: i for i, q in enumerate(qids_ref)}
-    print(f"Loaded L{args.layer} features for K={K_POINTS}, N={len(qids_ref)}", flush=True)
+    print(f"Loaded L{best_layer} features for K={K_POINTS}, N={len(qids_ref)}", flush=True)
 
     # ─── Labels, splits, entropy ──────────────────────────────────────────
-    records = list(read_jsonl(GENERATED_DIR / "sycophancy" / "labeled.jsonl"))
+    records = list(read_jsonl(gen_dir / "labeled.jsonl"))
     rec_lookup = {r["question_id"]: r for r in records}
-    with open(GENERATED_DIR / "sycophancy" / "splits.json") as f:
+    with open(gen_dir / "splits.json") as f:
         splits = json.load(f)
 
     ent_lookup = {}
-    for rec in read_jsonl(GENERATED_DIR / "sycophancy" / "answer_entropy.jsonl"):
+    for rec in read_jsonl(gen_dir / "answer_entropy.jsonl"):
         ent_lookup[rec["question_id"]] = rec["entropy"]
     print(f"Loaded {len(ent_lookup)} entropy records", flush=True)
 
@@ -107,7 +114,7 @@ def main():
         ("lr", LogisticRegression(C=1.0, max_iter=1000, solver="lbfgs")),
     ])
     pipe.fit(X_tv, y_tv)
-    print(f"Reference probe: L{args.layer} K{REF_K}, trainval N={len(tv_idx)}", flush=True)
+    print(f"Reference probe: L{best_layer} K{REF_K}, trainval N={len(tv_idx)}", flush=True)
 
     # ─── Confidence split by token entropy (trainval median) ─────────────
     tv_ent = np.array([ent_lookup[q] for q in trainval_qids if q in ent_lookup])
@@ -174,14 +181,14 @@ def main():
         print(f"  {regime:<10} " + "  ".join([f"K{k}:{g:+.3f}" for k, g in zip(K_POINTS, gap)]), flush=True)
 
     out = {
-        "layer": args.layer,
+        "layer": best_layer,
         "reference_k": REF_K,
         "k_points": K_POINTS,
         "entropy_median": ent_median,
         "n_test_total": len(test_qids),
         "trajectories": trajectories,
     }
-    out_path = RESULTS_DIR / "exp4_trajectories.json"
+    out_path = RESULTS_DIR / f"exp4_trajectories{suffix}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)

@@ -28,11 +28,13 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import GENERATED_DIR, SUBJECT_MODEL
+from src.config import GENERATED_DIR, GPTOSS_MODEL, SUBJECT_MODEL
 from src.datasets import load_dataset_for_behavior
 from src.lib import (
     apply_chat_template,
+    apply_chat_template_harmony,
     load_model,
+    load_model_gptoss,
     read_jsonl,
     resolve_device,
     write_jsonl,
@@ -41,6 +43,12 @@ from src.lib import (
 
 ANSWER_PREFIX = "\n\nThe answer is ("
 OPTION_LETTERS = ["A", "B"]
+
+# Harmony format: analysis channel closed, final channel opened
+HARMONY_ANALYSIS_OPEN = "<|channel|>analysis<|message|>"
+HARMONY_END = "<|end|>"
+HARMONY_ASSISTANT_START = "<|start|>assistant"
+HARMONY_FINAL_OPEN = "<|channel|>final<|message|>"
 
 
 def get_option_token_ids(tokenizer) -> dict[str, int]:
@@ -64,20 +72,29 @@ def get_option_token_ids(tokenizer) -> dict[str, int]:
     return out
 
 
-def build_input_ids(tokenizer, prompt: str, thinking: str) -> torch.Tensor:
-    prefix = apply_chat_template(tokenizer, prompt)
-    full = prefix + "<think>" + thinking + "</think>" + ANSWER_PREFIX
+def build_input_ids(tokenizer, prompt: str, thinking: str, harmony: bool = False) -> torch.Tensor:
+    if harmony:
+        prefix = apply_chat_template_harmony(tokenizer, prompt)
+        full = (
+            prefix + HARMONY_ANALYSIS_OPEN + thinking + HARMONY_END
+            + HARMONY_ASSISTANT_START + HARMONY_FINAL_OPEN
+            + "The answer is ("
+        )
+    else:
+        prefix = apply_chat_template(tokenizer, prompt)
+        full = prefix + "<think>" + thinking + "</think>" + ANSWER_PREFIX
     return tokenizer(full, return_tensors="pt")["input_ids"]
 
 
 @torch.no_grad()
 def compute_entropy_one(
     model, tokenizer, prompt: str, thinking: str, option_ids: dict[str, int],
+    harmony: bool = False,
 ) -> dict[str, float] | None:
     if not thinking or not thinking.strip():
         return None
     try:
-        ids = build_input_ids(tokenizer, prompt, thinking).to(model.device)
+        ids = build_input_ids(tokenizer, prompt, thinking, harmony=harmony).to(model.device)
         out = model(ids)
         # Logits for the next token after the full prefix.
         last_logits = out.logits[0, -1, :].float()
@@ -99,17 +116,20 @@ def compute_entropy_one(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default=SUBJECT_MODEL)
+    parser.add_argument("--model", default=None)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--shard-id", type=int, default=0)
     parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
     args = parser.parse_args()
 
     device = resolve_device(args.device)
+    is_gptoss = args.model_family == "gptoss"
+    dir_suffix = "_gptoss" if is_gptoss else ""
 
     # Load control responses (we score the model's uncertainty BEFORE persona
     # is introduced — that's the "baseline confidence" we want).
-    ctrl_path = GENERATED_DIR / "sycophancy" / "control.jsonl"
+    ctrl_path = GENERATED_DIR / f"sycophancy{dir_suffix}" / "control.jsonl"
     ctrl_records = list(read_jsonl(ctrl_path))
     print(f"Loaded {len(ctrl_records)} control records")
 
@@ -123,13 +143,17 @@ def main():
         print(f"Shard {args.shard_id}/{args.num_shards}: {len(ctrl_records)} records")
 
     # Load model
-    model, tokenizer, _ = load_model(args.model, device)
+    model_id = args.model or (GPTOSS_MODEL if is_gptoss else SUBJECT_MODEL)
+    if is_gptoss:
+        model, tokenizer, _ = load_model_gptoss(model_id, device)
+    else:
+        model, tokenizer, _ = load_model(model_id, device)
     model.eval()
 
     option_ids = get_option_token_ids(tokenizer)
     print(f"Option token ids: {option_ids}")
 
-    out_dir = GENERATED_DIR / "sycophancy"
+    out_dir = GENERATED_DIR / f"sycophancy{dir_suffix}"
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_shard{args.shard_id}" if args.num_shards > 1 else ""
     out_path = out_dir / f"answer_entropy{suffix}.jsonl"
@@ -154,7 +178,7 @@ def main():
                 continue
             result = compute_entropy_one(
                 model, tokenizer, q.question_control, rec.get("thinking", ""),
-                option_ids,
+                option_ids, harmony=is_gptoss,
             )
             if result is None:
                 skipped += 1

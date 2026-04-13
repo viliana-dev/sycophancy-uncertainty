@@ -34,12 +34,12 @@ from src.evaluate import bootstrap_auroc_se, compute_auroc
 from src.lib import read_jsonl
 
 
-BEST_LAYER = 30
+BEST_LAYER_QWEN = 30
+BEST_LAYER_GPTOSS = 18
 BEST_K = 100
 
 
-def load_features(layer: int, k_pct: int) -> tuple[np.ndarray, np.ndarray]:
-    feat_dir = DATA_DIR / "features" / "sycophancy"
+def load_features(feat_dir, layer: int, k_pct: int) -> tuple[np.ndarray, np.ndarray]:
     npz = np.load(feat_dir / f"L{layer}_K{k_pct}.npz")
     X = npz["X"]
     qids = npz["qids"]
@@ -155,18 +155,25 @@ def run_one_metric(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--layer", type=int, default=BEST_LAYER)
+    parser.add_argument("--layer", type=int, default=None)
     parser.add_argument("--k", type=int, default=BEST_K)
+    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
     args = parser.parse_args()
 
+    is_gptoss = args.model_family == "gptoss"
+    dir_suffix = "_gptoss" if is_gptoss else ""
+    feat_dir = DATA_DIR / "features" / f"sycophancy{dir_suffix}"
+    gen_dir = GENERATED_DIR / f"sycophancy{dir_suffix}"
+    best_layer = args.layer or (BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER_QWEN)
+
     # Load features for best (layer, K%)
-    X, qids = load_features(args.layer, args.k)
-    print(f"Features L{args.layer}_K{args.k}: X={X.shape}", flush=True)
+    X, qids = load_features(feat_dir, best_layer, args.k)
+    print(f"Features L{best_layer}_K{args.k}: X={X.shape}", flush=True)
 
     # Load labeled records and splits
-    records = list(read_jsonl(GENERATED_DIR / "sycophancy" / "labeled.jsonl"))
+    records = list(read_jsonl(gen_dir / "labeled.jsonl"))
     rec_lookup = {r["question_id"]: r for r in records}
-    with open(GENERATED_DIR / "sycophancy" / "splits.json") as f:
+    with open(gen_dir / "splits.json") as f:
         splits = json.load(f)
 
     # Heuristic uncertainty (already in labeled.jsonl)
@@ -174,14 +181,14 @@ def main():
 
     # Token entropy
     entropy_lookup = {}
-    ent_path = GENERATED_DIR / "sycophancy" / "answer_entropy.jsonl"
+    ent_path = gen_dir / "answer_entropy.jsonl"
     if ent_path.exists():
         for rec in read_jsonl(ent_path):
             entropy_lookup[rec["question_id"]] = rec["entropy"]
         print(f"Loaded {len(entropy_lookup)} entropy records", flush=True)
 
     out = {
-        "layer": args.layer,
+        "layer": best_layer,
         "k_pct": args.k,
         "by_metric": {},
     }
@@ -195,7 +202,7 @@ def main():
         )
 
     suffix = f"_K{args.k}" if args.k != BEST_K else ""
-    out_path = RESULTS_DIR / f"exp5_cross_prediction{suffix}.json"
+    out_path = RESULTS_DIR / f"exp5_cross_prediction{dir_suffix}{suffix}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
