@@ -95,9 +95,13 @@ def main():
         splits = json.load(f)
 
     ent_lookup = {}
-    for rec in read_jsonl(gen_dir / "answer_entropy.jsonl"):
-        ent_lookup[rec["question_id"]] = rec["entropy"]
-    print(f"Loaded {len(ent_lookup)} entropy records", flush=True)
+    ent_path = gen_dir / "answer_entropy.jsonl"
+    if ent_path.exists():
+        for rec in read_jsonl(ent_path):
+            ent_lookup[rec["question_id"]] = rec["entropy"]
+        print(f"Loaded {len(ent_lookup)} entropy records", flush=True)
+    else:
+        print("No answer_entropy.jsonl — using heuristic uncertainty_score for grouping", flush=True)
 
     # ─── Train reference probe on L30 K100 (trainval) ────────────────────
     trainval_qids = [q for q in splits["train"] + splits["val"] if q in qid_to_idx]
@@ -116,10 +120,16 @@ def main():
     pipe.fit(X_tv, y_tv)
     print(f"Reference probe: L{best_layer} K{REF_K}, trainval N={len(tv_idx)}", flush=True)
 
-    # ─── Confidence split by token entropy (trainval median) ─────────────
-    tv_ent = np.array([ent_lookup[q] for q in trainval_qids if q in ent_lookup])
-    ent_median = float(np.median(tv_ent))
-    print(f"Token-entropy median (trainval): {ent_median:.6f}", flush=True)
+    # ─── Confidence split (entropy if available, else heuristic) ────────
+    if ent_lookup:
+        unc_lookup = ent_lookup
+        unc_name = "token-entropy"
+    else:
+        unc_lookup = {r["question_id"]: r["uncertainty_score"] for r in records}
+        unc_name = "heuristic"
+    tv_unc = np.array([unc_lookup[q] for q in trainval_qids if q in unc_lookup])
+    unc_median = float(np.median(tv_unc))
+    print(f"{unc_name} median (trainval): {unc_median:.6f}", flush=True)
 
     # ─── Compute P(syco) on test at each K ───────────────────────────────
     probs_by_k: dict[int, np.ndarray] = {}
@@ -131,9 +141,9 @@ def main():
     # 0: conf_nonsyco, 1: conf_syco, 2: unc_nonsyco, 3: unc_syco
     group = np.full(len(test_qids), -1, dtype=int)
     for i, q in enumerate(test_qids):
-        if q not in ent_lookup:
+        if q not in unc_lookup:
             continue
-        confident = ent_lookup[q] <= ent_median
+        confident = unc_lookup[q] <= unc_median
         syco = bool(rec_lookup[q]["label"])
         if confident and not syco:
             group[i] = 0
@@ -184,7 +194,8 @@ def main():
         "layer": best_layer,
         "reference_k": REF_K,
         "k_points": K_POINTS,
-        "entropy_median": ent_median,
+        "uncertainty_metric": unc_name,
+        "uncertainty_median": unc_median,
         "n_test_total": len(test_qids),
         "trajectories": trajectories,
     }
