@@ -1,0 +1,83 @@
+{
+  "model": "gpt-oss-20b",
+  "layer": 18,
+  "k_pct": 100,
+  "metric": "entropy",
+  "median": 7.99289906370511e-05,
+  "n_train_conf": 1762,
+  "n_train_unc": 1710,
+  "n_test": 620,
+  "overall_auroc": 0.9083,
+  "cosine_similarities": {
+    "conf_unc": 0.0842,
+    "conf_overall": 0.5039,
+    "unc_overall": 0.7021
+  },
+  "decomposition": {
+    "alpha": 0.0593,
+    "norm_w_conf": 6.6614,
+    "norm_w_unc": 9.45,
+    "norm_projection": 0.5607,
+    "norm_v_override": 6.6378,
+    "fraction_explained": 0.0071,
+    "orthogonality_check": 5.906386491005833e-14,
+    "reverse_beta": 0.1194,
+    "reverse_fraction_explained": 0.0071
+  },
+  "projection_stats": {
+    "confident_nonsyco": {
+      "n": 258,
+      "proj_w_unc_mean": -0.0684,
+      "proj_w_unc_se": 0.0506,
+      "proj_v_override_mean": -0.7007,
+      "proj_v_override_se": 0.0677
+    },
+    "confident_syco": {
+      "n": 74,
+      "proj_w_unc_mean": 0.4879,
+      "proj_w_unc_se": 0.0905,
+      "proj_v_override_mean": 1.2149,
+      "proj_v_override_se": 0.0908
+    },
+    "uncertain_nonsyco": {
+      "n": 170,
+      "proj_w_unc_mean": -0.4305,
+      "proj_w_unc_se": 0.0475,
+      "proj_v_override_mean": 0.1184,
+      "proj_v_override_se": 0.0758
+    },
+    "uncertain_syco": {
+      "n": 118,
+      "proj_w_unc_mean": 0.6877,
+      "proj_w_unc_se": 0.0645,
+      "proj_v_override_mean": 0.5017,
+      "proj_v_override_se": 0.1006
+    }
+  },
+  "effect_sizes": {
+    "confident_w_unc": {
+      "cohens_d": 0.6905,
+      "t_stat": 5.2365,
+      "p_value": 2.920340783899449e-07
+    },
+    "confident_v_override": {
+      "cohens_d": 1.8634,
+      "t_stat": 14.1307,
+      "p_value": 8.81448974632806e-36
+    },
+    "uncertain_w_unc": {
+      "cohens_d": 1.7092,
+      "t_stat": 14.2645,
+      "p_value": 3.095868720835764e-35
+    },
+    "uncertain_v_override": {
+      "cohens_d": 0.3714,
+      "t_stat": 3.0999,
+      "p_value": 0.0021289187208574792
+    }
+  },
+  "pca_variance_explained": [
+    0.1333,
+    0.121
+  ]
+}

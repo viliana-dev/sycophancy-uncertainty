@@ -1,0 +1,83 @@
+{
+  "model": "Qwen3-14B",
+  "layer": 30,
+  "k_pct": 100,
+  "metric": "entropy",
+  "median": 0.00010056667829503647,
+  "n_train_conf": 2167,
+  "n_train_unc": 2159,
+  "n_test": 770,
+  "overall_auroc": 0.9093,
+  "cosine_similarities": {
+    "conf_unc": 0.0573,
+    "conf_overall": 0.4405,
+    "unc_overall": 0.7419
+  },
+  "decomposition": {
+    "alpha": 0.0339,
+    "norm_w_conf": 6.2823,
+    "norm_w_unc": 10.6037,
+    "norm_projection": 0.3599,
+    "norm_v_override": 6.272,
+    "fraction_explained": 0.0033,
+    "orthogonality_check": 3.26405569239796e-14,
+    "reverse_beta": 0.0967,
+    "reverse_fraction_explained": 0.0033
+  },
+  "projection_stats": {
+    "confident_nonsyco": {
+      "n": 259,
+      "proj_w_unc_mean": -0.5572,
+      "proj_w_unc_se": 0.0633,
+      "proj_v_override_mean": -1.2469,
+      "proj_v_override_se": 0.0704
+    },
+    "confident_syco": {
+      "n": 133,
+      "proj_w_unc_mean": 0.5087,
+      "proj_w_unc_se": 0.06,
+      "proj_v_override_mean": 1.4056,
+      "proj_v_override_se": 0.0873
+    },
+    "uncertain_nonsyco": {
+      "n": 188,
+      "proj_w_unc_mean": -0.1863,
+      "proj_w_unc_se": 0.0444,
+      "proj_v_override_mean": -0.2609,
+      "proj_v_override_se": 0.0857
+    },
+    "uncertain_syco": {
+      "n": 190,
+      "proj_w_unc_mean": 0.5205,
+      "proj_w_unc_se": 0.041,
+      "proj_v_override_mean": 0.6417,
+      "proj_v_override_se": 0.0826
+    }
+  },
+  "effect_sizes": {
+    "confident_w_unc": {
+      "cohens_d": 1.1567,
+      "t_stat": 10.8429,
+      "p_value": 4.03827541321231e-24
+    },
+    "confident_v_override": {
+      "cohens_d": 2.4296,
+      "t_stat": 22.7754,
+      "p_value": 1.232952003298193e-73
+    },
+    "uncertain_w_unc": {
+      "cohens_d": 1.2041,
+      "t_stat": 11.7052,
+      "p_value": 3.380476197682676e-27
+    },
+    "uncertain_v_override": {
+      "cohens_d": 0.7801,
+      "t_stat": 7.5832,
+      "p_value": 2.665505006662788e-13
+    }
+  },
+  "pca_variance_explained": [
+    0.1451,
+    0.1142
+  ]
+}

@@ -369,10 +369,84 @@ Both directions lose ~0.25. This is SYMMETRIC — unlike Qwen where unc→conf h
 | Trajectory shapes | 4 distinct ✓ | 4 distinct ✓ |
 | Cross-prediction (entropy) | asymmetric (conf⊃unc) | symmetric (mutual drop) |
 | Uncertain syco trajectory | flat drift ✓ | flat drift ✓ |
+| cos(w_conf, w_unc) | 0.057 (orthogonal) | 0.084 (orthogonal) |
+| v_override d (conf/unc) | 2.43 / 0.78 (3× drop) | 1.86 / 0.37 (5× drop) |
+| w_unc d (conf/unc) | 1.16 / 1.20 (stable) | 0.69 / 1.71 (swapped) |
 
 **What replicates:** Overall probe accuracy (0.91), 4 trajectory shapes, uncertain-syco flat drift, sycophancy signal from K10.
 
 **What differs:** Qwen shows sharp confident/uncertain bifurcation in probe quality and asymmetric transfer; gpt-oss shows uniform probe quality and symmetric non-transfer. The sycophancy-uncertainty relationship is architecture-dependent — but the core finding (sycophancy is detectable and mechanistically different across uncertainty levels) holds in both.
+
+### Geometric Analysis of Probe Vectors (DONE)
+
+**Question:** What is the geometric relationship between the confident-only and uncertain-only sycophancy directions?
+
+**Method:** Train 3 probes per model on L_best K100 features (entropy-based median split):
+- `w_overall`: trained on all trainval
+- `w_conf`: trained on confident trainval only
+- `w_unc`: trained on uncertain trainval only
+
+Extract weight vectors from `LogisticRegression.coef_`, compute cosine similarities, decompose `w_conf = α·w_unc + v_override`, and project test activations onto the (w_unc, v_override) basis.
+
+**Result — Cosine similarity (w_conf vs w_unc):**
+
+| Model | cos(w_conf, w_unc) | cos(w_conf, w_overall) | cos(w_unc, w_overall) |
+|---|---|---|---|
+| Qwen3-14B | **0.057** | 0.440 | 0.742 |
+| gpt-oss-20b | **0.084** | 0.504 | 0.702 |
+
+Both models: w_conf and w_unc are **nearly orthogonal**. The confident and uncertain sycophancy directions occupy independent subspaces in both architectures. w_unc dominates w_overall (cos~0.7), while w_conf is a minority contributor (cos~0.5).
+
+**Result — Decomposition:**
+
+| | Qwen | gpt-oss |
+|---|---|---|
+| α (projection coefficient) | 0.034 | 0.059 |
+| Fraction of w_conf explained by w_unc | **0.3%** | **0.7%** |
+| Fraction of w_unc explained by w_conf | 0.3% | 0.7% |
+| ||v_override|| / ||w_conf|| | 99.8% | 99.6% |
+
+The vectors are mutually independent — neither explains the other. The original "nested" hypothesis (w_conf = drift + override) is geometrically wrong in the weight space: the confident direction is not a superset of the uncertain one. Both are nearly entirely orthogonal.
+
+**Result — Projection analysis (the key finding):**
+
+Despite orthogonal weight vectors, the **activation projections** onto these vectors tell a different story:
+
+**Qwen3-14B:**
+
+| Group | N | proj(w_unc) | proj(v_override) |
+|---|---|---|---|
+| Confident + Non-syco | 259 | −0.557 | **−1.247** |
+| Confident + Syco | 133 | +0.509 | **+1.406** |
+| Uncertain + Non-syco | 188 | −0.186 | −0.261 |
+| Uncertain + Syco | 190 | +0.521 | +0.642 |
+
+Cohen's d (syco vs nonsyco):
+- Confident regime: w_unc d=1.16, **v_override d=2.43**
+- Uncertain regime: w_unc d=1.20, **v_override d=0.78**
+
+**gpt-oss-20b:**
+
+| Group | N | proj(w_unc) | proj(v_override) |
+|---|---|---|---|
+| Confident + Non-syco | 258 | −0.068 | **−0.701** |
+| Confident + Syco | 74 | +0.488 | **+1.215** |
+| Uncertain + Non-syco | 170 | −0.431 | +0.118 |
+| Uncertain + Syco | 118 | +0.688 | +0.502 |
+
+Cohen's d:
+- Confident regime: **w_unc d=0.69**, **v_override d=1.86**
+- Uncertain regime: **w_unc d=1.71**, **v_override d=0.37**
+
+**Interpretation — the architecture story:**
+
+1. **Both models:** w_conf and w_unc are orthogonal weight vectors. Sycophancy is not one direction — it's at least two independent linear features.
+
+2. **Qwen (Dense):** Both axes separate syco/nonsyco in the confident regime (d=1.16 and d=2.43). But v_override collapses in the uncertain regime (d=2.43→0.78, 3× drop). The confident probe's AUROC 0.966 comes from leveraging v_override for 2.4σ separation; when applied to uncertain records where v_override carries only 0.78σ signal, it drops to 0.720. The uncertain probe never learns v_override (it's absent from uncertain training data), but transfers to confident records because w_unc alone provides d=1.16 there — enough for 0.805 AUROC. This explains the asymmetric cross-prediction.
+
+3. **gpt-oss (MoE):** The two axes swap dominance: v_override dominates confident (d=1.86) while w_unc dominates uncertain (d=1.71). Each regime "lives" on its own vector. Neither probe transfers because each relies on the axis that is weak in the other regime. This explains the symmetric cross-prediction drop.
+
+4. **Architecture hypothesis:** In Dense networks, uncertain activations still pass through the same parameters that encode v_override, leaving a residual trace (d=0.78). In MoE networks, the router may steer uncertain tokens through different experts, physically isolating them from the v_override subspace (d=0.37, nearly 5× weaker than Dense).
 
 ---
 
