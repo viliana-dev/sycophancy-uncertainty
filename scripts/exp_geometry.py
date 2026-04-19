@@ -38,6 +38,7 @@ from src.lib import read_jsonl
 
 BEST_LAYER_QWEN = 30
 BEST_LAYER_GPTOSS = 18
+BEST_LAYER_QWEN_MOE = 36
 BEST_K = 100
 
 GROUP_NAMES = {
@@ -83,16 +84,24 @@ def extract_weight(pipe) -> np.ndarray:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss", "qwen_moe"], default="qwen")
     parser.add_argument("--metric", choices=["entropy", "heuristic"], default="entropy")
     args = parser.parse_args()
 
     is_gptoss = args.model_family == "gptoss"
-    suffix = "_gptoss" if is_gptoss else ""
+    is_qwen_moe = args.model_family == "qwen_moe"
+    suffix = "_gptoss" if is_gptoss else ("_qwen_moe" if is_qwen_moe else "")
     feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
     gen_dir = GENERATED_DIR / f"sycophancy{suffix}"
-    best_layer = BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER_QWEN
-    model_label = "gpt-oss-20b" if is_gptoss else "Qwen3-14B"
+    if is_gptoss:
+        best_layer = BEST_LAYER_GPTOSS
+        model_label = "gpt-oss-20b"
+    elif is_qwen_moe:
+        best_layer = BEST_LAYER_QWEN_MOE
+        model_label = "Qwen3-30B-A3B"
+    else:
+        best_layer = BEST_LAYER_QWEN
+        model_label = "Qwen3-14B"
 
     # ── Load features ────────────────────────────────────────────────────
     X, qids = load_features(feat_dir, best_layer, BEST_K)
@@ -324,7 +333,7 @@ def main():
     ax.legend(fontsize=9, loc="best")
     ax.set_aspect("equal", adjustable="datalim")
     fig.tight_layout()
-    pca_path = PLOTS_DIR / f"geometry_pca{'_gptoss' if is_gptoss else ''}.png"
+    pca_path = PLOTS_DIR / f"geometry_pca{suffix}.png"
     fig.savefig(pca_path, dpi=150)
     plt.close(fig)
     print(f"\nSaved {pca_path}", flush=True)
@@ -357,7 +366,7 @@ def main():
     ax.axhline(0, color="gray", lw=0.5, ls=":")
     ax.axvline(0, color="gray", lw=0.5, ls=":")
     fig.tight_layout()
-    probe_path = PLOTS_DIR / f"geometry_probe_space{'_gptoss' if is_gptoss else ''}.png"
+    probe_path = PLOTS_DIR / f"geometry_probe_space{suffix}.png"
     fig.savefig(probe_path, dpi=150)
     plt.close(fig)
     print(f"Saved {probe_path}", flush=True)
@@ -386,7 +395,7 @@ def main():
 
     fig.suptitle(f"Group Projections — {model_label}", fontsize=13)
     fig.tight_layout()
-    bar_path = PLOTS_DIR / f"geometry_bars{'_gptoss' if is_gptoss else ''}.png"
+    bar_path = PLOTS_DIR / f"geometry_bars{suffix}.png"
     fig.savefig(bar_path, dpi=150)
     plt.close(fig)
     print(f"Saved {bar_path}", flush=True)

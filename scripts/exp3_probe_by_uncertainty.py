@@ -62,16 +62,20 @@ def main():
         "--stratify", choices=["percentile", "rank"], default="percentile",
         help="rank uses ordinal ranks (good when scores have many ties, e.g. token entropy)",
     )
-    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss", "qwen_moe"], default="qwen")
     args = parser.parse_args()
 
     is_gptoss = args.model_family == "gptoss"
-    suffix = "_gptoss" if is_gptoss else ""
+    is_qwen_moe = args.model_family == "qwen_moe"
+    suffix = "_gptoss" if is_gptoss else ("_qwen_moe" if is_qwen_moe else "")
     feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
     gen_dir = GENERATED_DIR / f"sycophancy{suffix}"
 
     if is_gptoss:
         layer_indices = resolve_layer_indices(GPTOSS_NUM_LAYERS, GPTOSS_LAYER_FRACS)
+    elif is_qwen_moe:
+        from src.config import QWEN_MOE_NUM_LAYERS, QWEN_MOE_LAYER_FRACS
+        layer_indices = resolve_layer_indices(QWEN_MOE_NUM_LAYERS, QWEN_MOE_LAYER_FRACS)
     else:
         layer_indices = resolve_layer_indices(NUM_LAYERS, DEFAULT_LAYER_FRACS)
     k_percents = [float(k) for k in TRUNCATION_POINTS]
@@ -142,7 +146,7 @@ def main():
             test_idx = [qid_to_idx[q] for q in splits["test"] if q in qid_to_idx]
             trainval_idx = train_idx + val_idx
 
-            y = np.array([rec_lookup[q]["label"] for q in qids])
+            y = np.array([rec_lookup[q]["label"] if q in rec_lookup else 0 for q in qids])
 
             X_tv = X[trainval_idx]
             y_tv = y[trainval_idx]
@@ -303,6 +307,8 @@ def main():
     out_name = "exp3_probe_by_uncertainty"
     if is_gptoss:
         out_name += "_gptoss"
+    elif is_qwen_moe:
+        out_name += "_qwen_moe"
     if args.uncertainty_source != "heuristic":
         out_name += f"_{args.uncertainty_source}"
     if args.stratify != "percentile":

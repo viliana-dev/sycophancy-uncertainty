@@ -60,6 +60,17 @@ GPTOSS_DEFAULT_REASONING_EFFORT = "medium"
 # Suffix for all gpt-oss output dirs so we never collide with Qwen data.
 GPTOSS_DATA_SUFFIX = "_gptoss"
 
+# ---------------------------------------------------------------------------
+# Qwen3-30B-A3B: same family as Qwen3-14B but MoE (128 experts, 8 active).
+# 48 layers, hidden_size=2048. Controls for training pipeline confound.
+# ---------------------------------------------------------------------------
+
+QWEN_MOE_MODEL = "Qwen/Qwen3-30B-A3B"
+QWEN_MOE_NUM_LAYERS = 48
+QWEN_MOE_HIDDEN_SIZE = 2048
+QWEN_MOE_LAYER_FRACS = [0.25, 0.5, 0.75, 0.875]
+QWEN_MOE_DATA_SUFFIX = "_qwen_moe"
+
 # Truncation points for probe evaluation (% of CoT)
 TRUNCATION_POINTS = [10, 25, 50, 75, 100]
 

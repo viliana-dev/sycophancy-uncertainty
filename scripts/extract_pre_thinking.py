@@ -57,14 +57,15 @@ from src.lib import (
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss", "qwen_moe"], default="qwen")
     parser.add_argument("--shard-id", type=int, default=0)
     parser.add_argument("--num-shards", type=int, default=1)
     args = parser.parse_args()
 
     device = resolve_device(args.device)
     is_gptoss = args.model_family == "gptoss"
-    suffix = "_gptoss" if is_gptoss else ""
+    is_qwen_moe = args.model_family == "qwen_moe"
+    suffix = "_gptoss" if is_gptoss else ("_qwen_moe" if is_qwen_moe else "")
 
     if is_gptoss:
         from src.lib import load_model_gptoss, apply_chat_template_harmony
@@ -80,10 +81,17 @@ def main():
             return tokenizer(text, return_tensors="pt")["input_ids"]
     else:
         from src.lib import load_model, apply_chat_template
-        model_id = SUBJECT_MODEL
-        hidden_size = HIDDEN_SIZE
-        layer_fracs = DEFAULT_LAYER_FRACS
-        n_layers = NUM_LAYERS
+        if is_qwen_moe:
+            from src.config import QWEN_MOE_MODEL, QWEN_MOE_HIDDEN_SIZE, QWEN_MOE_LAYER_FRACS, QWEN_MOE_NUM_LAYERS
+            model_id = QWEN_MOE_MODEL
+            hidden_size = QWEN_MOE_HIDDEN_SIZE
+            layer_fracs = QWEN_MOE_LAYER_FRACS
+            n_layers = QWEN_MOE_NUM_LAYERS
+        else:
+            model_id = SUBJECT_MODEL
+            hidden_size = HIDDEN_SIZE
+            layer_fracs = DEFAULT_LAYER_FRACS
+            n_layers = NUM_LAYERS
         model, tokenizer, _ = load_model(model_id, device)
 
         def build_pre_thinking_ids(prompt: str) -> torch.Tensor:

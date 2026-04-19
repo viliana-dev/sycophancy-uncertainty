@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
     ANTHROPIC_EVALS_DIR, DATA_DIR, GENERATED_DIR, PLOTS_DIR, RESULTS_DIR,
-    SUBJECT_MODEL,
+    SUBJECT_MODEL, GPTOSS_MODEL,
 )
 from src.lib import (
     apply_chat_template,
@@ -45,6 +45,9 @@ from src.prompts import parse_ab_answer
 BEST_LAYER = 30
 BEST_K = 100
 STEERING_LAYER = 30
+
+BEST_LAYER_GPTOSS = 18
+STEERING_LAYER_GPTOSS = 18
 
 
 # ── Probe training ──────────────────────────────────────────────────────────
@@ -106,14 +109,19 @@ def parse_thinking_answer(text: str) -> tuple[str, str]:
 
 def generate_steered_batch(model, tokenizer, prompts, device,
                            direction_tensor=None, alpha=0.0,
-                           max_new_tokens=8192):
-    """Batched generation with optional activation steering at STEERING_LAYER."""
-    texts = [apply_chat_template(tokenizer, p) for p in prompts]
+                           max_new_tokens=8192, steering_layer=STEERING_LAYER,
+                           template_fn=None, parse_fn=None):
+    """Batched generation with optional activation steering."""
+    if template_fn is None:
+        template_fn = apply_chat_template
+    if parse_fn is None:
+        parse_fn = parse_thinking_answer
+    texts = [template_fn(tokenizer, p) for p in prompts]
     inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=False).to(device)
 
     hook = None
     if direction_tensor is not None and alpha != 0:
-        hook = model.model.layers[STEERING_LAYER].register_forward_hook(
+        hook = model.model.layers[steering_layer].register_forward_hook(
             make_steering_hook(direction_tensor, alpha)
         )
 
@@ -136,16 +144,16 @@ def generate_steered_batch(model, tokenizer, prompts, device,
     for i in range(len(prompts)):
         new_tokens = output_ids[i][input_len:]
         raw = tokenizer.decode(new_tokens, skip_special_tokens=False)
-        thinking, answer = parse_thinking_answer(raw)
+        thinking, answer = parse_fn(raw)
         results.append((answer, thinking))
     return results
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
-def compute_directions(feat_dir, gen_dir):
+def compute_directions(feat_dir, gen_dir, best_layer=BEST_LAYER):
     """Train probes and compute steering directions in raw activation space."""
-    X, qids = load_features(feat_dir, BEST_LAYER, BEST_K)
+    X, qids = load_features(feat_dir, best_layer, BEST_K)
     qid_to_idx = {q: i for i, q in enumerate(qids)}
 
     records = list(read_jsonl(gen_dir / "labeled.jsonl"))
@@ -235,7 +243,8 @@ def compute_directions(feat_dir, gen_dir):
 
 def run_config(model, tokenizer, device, direction_name, direction_tensor,
                alpha, rec_lookup, test_qids, test_groups, amb_lookup, out_dir,
-               max_new_tokens=8192, batch_size=8):
+               max_new_tokens=8192, batch_size=8,
+               steering_layer=STEERING_LAYER, template_fn=None, parse_fn=None):
     """Run one (direction, alpha) config over all test records."""
     tag = f"{direction_name}_a{alpha}"
     out_path = out_dir / f"{tag}.jsonl"
@@ -268,6 +277,9 @@ def run_config(model, tokenizer, device, direction_name, direction_tensor,
                 direction_tensor=direction_tensor,
                 alpha=alpha,
                 max_new_tokens=max_new_tokens,
+                steering_layer=steering_layer,
+                template_fn=template_fn,
+                parse_fn=parse_fn,
             )
 
             for q, (answer, thinking) in zip(batch_qids, batch_results):
@@ -279,8 +291,8 @@ def run_config(model, tokenizer, device, direction_name, direction_tensor,
                     "question_id": q,
                     "direction": direction_name,
                     "alpha": alpha,
-                    "steered_answer": answer[:500],
-                    "steered_thinking": thinking[:500],
+                    "steered_answer": answer,
+                    "steered_thinking": thinking,
                     "parsed_answer": parsed,
                     "is_sycophantic": is_syco,
                     "original_label": rec_lookup[q]["label"],
@@ -303,6 +315,8 @@ def run_config(model, tokenizer, device, direction_name, direction_tensor,
                             model, tokenizer, [rec_lookup[q]["question_raw"]],
                             device, direction_tensor=direction_tensor,
                             alpha=alpha, max_new_tokens=max_new_tokens,
+                            steering_layer=steering_layer,
+                            template_fn=template_fn, parse_fn=parse_fn,
                         )
                         answer, thinking = results[0]
                         parsed = parse_ab_answer(answer)
@@ -310,8 +324,8 @@ def run_config(model, tokenizer, device, direction_name, direction_tensor,
                         is_syco = parsed is not None and f"({parsed})" == amb
                         result = {
                             "question_id": q, "direction": direction_name,
-                            "alpha": alpha, "steered_answer": answer[:500],
-                            "steered_thinking": thinking[:500],
+                            "alpha": alpha, "steered_answer": answer,
+                            "steered_thinking": thinking,
                             "parsed_answer": parsed, "is_sycophantic": is_syco,
                             "original_label": rec_lookup[q]["label"],
                             "group": test_groups.get(q, "unknown"),
@@ -387,7 +401,7 @@ def analyze_results(out_dir, test_qids, test_groups):
     return results
 
 
-def make_plots(results, plots_dir):
+def make_plots(results, plots_dir, suffix=""):
     """Generate steering effect plots."""
     plots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -455,9 +469,10 @@ def make_plots(results, plots_dir):
         max(dir_data.get("v_override", {}).get("unc", [0])),
     ) * 1.2))
 
-    fig.suptitle("Activation Steering — Qwen3-14B (L30)", fontsize=13)
+    model_name = "gpt-oss-20b (L18)" if suffix == "_gptoss" else "Qwen3-14B (L30)"
+    fig.suptitle(f"Activation Steering — {model_name}", fontsize=13)
     fig.tight_layout()
-    path = plots_dir / "steering_syco_rate.png"
+    path = plots_dir / f"steering_syco_rate{suffix}.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"Saved {path}", flush=True)
@@ -466,6 +481,7 @@ def make_plots(results, plots_dir):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
     parser.add_argument("--direction", required=True,
                         choices=["baseline", "w_overall", "v_override", "random"])
     parser.add_argument("--alphas", nargs="+", type=float, required=True)
@@ -480,16 +496,20 @@ def main():
                         help="Skip generation, just analyze existing results")
     args = parser.parse_args()
 
+    is_gptoss = args.model_family == "gptoss"
+    suffix = "_gptoss" if is_gptoss else ""
+
     device = resolve_device(args.device)
-    feat_dir = DATA_DIR / "features" / "sycophancy"
-    gen_dir = GENERATED_DIR / "sycophancy"
+    feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
+    gen_dir = GENERATED_DIR / f"sycophancy{suffix}"
     out_dir = gen_dir / "steering"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Compute directions (CPU) ─────────────────────────────────────────
-    print("Computing steering directions...", flush=True)
+    best_layer = BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER
+    print(f"Computing steering directions (layer {best_layer})...", flush=True)
     directions, rec_lookup, test_qids, test_groups, median, amb_lookup = compute_directions(
-        feat_dir, gen_dir,
+        feat_dir, gen_dir, best_layer=best_layer,
     )
     # Subsample if requested (balanced by group)
     if args.max_records and args.max_records < len(test_qids):
@@ -517,15 +537,25 @@ def main():
             print(f"  {tag}: syco={r['syco_rate']:.3f} conf={r['conf_syco_rate']:.3f} "
                   f"unc={r['unc_syco_rate']:.3f} parse={r['parse_rate']:.3f}")
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(RESULTS_DIR / "exp_steering.json", "w") as f:
+        with open(RESULTS_DIR / f"exp_steering{suffix}.json", "w") as f:
             json.dump(results, f, indent=2)
-        print(f"\nSaved {RESULTS_DIR / 'exp_steering.json'}", flush=True)
-        make_plots(results, PLOTS_DIR)
+        print(f"\nSaved {RESULTS_DIR / f'exp_steering{suffix}.json'}", flush=True)
+        make_plots(results, PLOTS_DIR, suffix=suffix)
         return
 
     # ── Load model ───────────────────────────────────────────────────────
     print(f"\nLoading model on {device}...", flush=True)
-    model, tokenizer, _ = load_model(SUBJECT_MODEL, device)
+    if is_gptoss:
+        from src.lib import load_model_gptoss, apply_chat_template_harmony, parse_thinking_answer_harmony
+        model, tokenizer, _ = load_model_gptoss(GPTOSS_MODEL, device)
+        steering_layer = STEERING_LAYER_GPTOSS
+        template_fn = lambda tok, p: apply_chat_template_harmony(tok, p)
+        parse_fn = parse_thinking_answer_harmony
+    else:
+        model, tokenizer, _ = load_model(SUBJECT_MODEL, device)
+        steering_layer = STEERING_LAYER
+        template_fn = apply_chat_template
+        parse_fn = parse_thinking_answer
     tokenizer.padding_side = "left"
 
     # Convert directions to tensors
@@ -560,6 +590,9 @@ def main():
             rec_lookup, test_qids, test_groups, amb_lookup, out_dir,
             max_new_tokens=args.max_new_tokens,
             batch_size=args.batch_size,
+            steering_layer=steering_layer,
+            template_fn=template_fn,
+            parse_fn=parse_fn,
         )
         torch.cuda.empty_cache()
 
@@ -575,11 +608,11 @@ def main():
               f"flips={r['syco_to_nonsyco']}/{r['nonsyco_to_syco']}")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(RESULTS_DIR / "exp_steering.json", "w") as f:
+    with open(RESULTS_DIR / f"exp_steering{suffix}.json", "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\nSaved {RESULTS_DIR / 'exp_steering.json'}", flush=True)
+    print(f"\nSaved {RESULTS_DIR / f'exp_steering{suffix}.json'}", flush=True)
 
-    make_plots(results, PLOTS_DIR)
+    make_plots(results, PLOTS_DIR, suffix=suffix)
 
 
 if __name__ == "__main__":

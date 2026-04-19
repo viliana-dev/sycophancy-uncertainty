@@ -199,7 +199,8 @@ def run_sycophancy_pipeline(
     """
     api_key = get_api_key() if not local else None
     is_gptoss = model_family == "gptoss"
-    dir_suffix = "_gptoss" if is_gptoss else ""
+    is_qwen_moe = model_family == "qwen_moe"
+    dir_suffix = "_gptoss" if is_gptoss else ("_qwen_moe" if is_qwen_moe else "")
     behavior_dir = GENERATED_DIR / f"sycophancy{dir_suffix}"
     behavior_dir.mkdir(parents=True, exist_ok=True)
 
@@ -249,13 +250,17 @@ def run_sycophancy_pipeline(
             _apply_tpl = lambda msgs: apply_chat_template_messages_harmony(_tokenizer, msgs)
             _parse = parse_thinking_answer_harmony
         else:
-            from src.config import SUBJECT_MODEL
             from src.lib import (
                 load_model,
                 apply_chat_template_messages,
                 parse_thinking_answer,
             )
-            _model_id = SUBJECT_MODEL
+            if is_qwen_moe:
+                from src.config import QWEN_MOE_MODEL
+                _model_id = QWEN_MOE_MODEL
+            else:
+                from src.config import SUBJECT_MODEL
+                _model_id = SUBJECT_MODEL
             _max_new = 8192
             print(f"\n{BOLD}Loading local model {_model_id} ({_device}), batch_size={batch_size}...{RESET}")
             _model, _tokenizer, _ = load_model(_model_id, _device)
@@ -744,8 +749,8 @@ def main():
                         help="Total shards for parallel multi-GPU runs")
     parser.add_argument("--batch-size", type=int, default=4,
                         help="Batch size for local inference (default: 4, use 8 on 80GB GPUs)")
-    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen",
-                        help="Model family: qwen (Qwen3-14B) or gptoss (gpt-oss-20b)")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss", "qwen_moe"], default="qwen",
+                        help="Model family: qwen (Qwen3-14B), gptoss (gpt-oss-20b), or qwen_moe (Qwen3-30B-A3B)")
     args = parser.parse_args()
 
     run_generation_pipeline(

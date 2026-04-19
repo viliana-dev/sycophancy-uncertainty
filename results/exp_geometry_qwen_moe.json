@@ -1,0 +1,83 @@
+{
+  "model": "Qwen3-30B-A3B",
+  "layer": 36,
+  "k_pct": 100,
+  "metric": "entropy",
+  "median": 0.0003166624748251526,
+  "n_train_conf": 2135,
+  "n_train_unc": 2074,
+  "n_test": 749,
+  "overall_auroc": 0.8273,
+  "cosine_similarities": {
+    "conf_unc": 0.1023,
+    "conf_overall": 0.4485,
+    "unc_overall": 0.7143
+  },
+  "decomposition": {
+    "alpha": 0.0633,
+    "norm_w_conf": 8.935,
+    "norm_w_unc": 14.4418,
+    "norm_projection": 0.9142,
+    "norm_v_override": 8.8881,
+    "fraction_explained": 0.0105,
+    "orthogonality_check": 5.917488721252084e-14,
+    "reverse_beta": 0.1654,
+    "reverse_fraction_explained": 0.0105
+  },
+  "projection_stats": {
+    "confident_nonsyco": {
+      "n": 264,
+      "proj_w_unc_mean": -0.3958,
+      "proj_w_unc_se": 0.0521,
+      "proj_v_override_mean": -0.8456,
+      "proj_v_override_se": 0.0615
+    },
+    "confident_syco": {
+      "n": 115,
+      "proj_w_unc_mean": 0.298,
+      "proj_w_unc_se": 0.0422,
+      "proj_v_override_mean": 0.7653,
+      "proj_v_override_se": 0.0548
+    },
+    "uncertain_nonsyco": {
+      "n": 191,
+      "proj_w_unc_mean": 0.0143,
+      "proj_w_unc_se": 0.0303,
+      "proj_v_override_mean": 0.1765,
+      "proj_v_override_se": 0.052
+    },
+    "uncertain_syco": {
+      "n": 179,
+      "proj_w_unc_mean": 0.2977,
+      "proj_w_unc_se": 0.0336,
+      "proj_v_override_mean": 0.4514,
+      "proj_v_override_se": 0.052
+    }
+  },
+  "effect_sizes": {
+    "confident_w_unc": {
+      "cohens_d": 0.9259,
+      "t_stat": 8.2867,
+      "p_value": 2.064746229578884e-15
+    },
+    "confident_v_override": {
+      "cohens_d": 1.8004,
+      "t_stat": 16.1141,
+      "p_value": 8.124904370932293e-45
+    },
+    "uncertain_w_unc": {
+      "cohens_d": 0.6529,
+      "t_stat": 6.2763,
+      "p_value": 9.757347050745059e-10
+    },
+    "uncertain_v_override": {
+      "cohens_d": 0.3884,
+      "t_stat": 3.7335,
+      "p_value": 0.00021873982909940702
+    }
+  },
+  "pca_variance_explained": [
+    0.1436,
+    0.1075
+  ]
+}

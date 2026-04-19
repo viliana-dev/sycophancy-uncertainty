@@ -120,12 +120,13 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--shard-id", type=int, default=0)
     parser.add_argument("--num-shards", type=int, default=1)
-    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss", "qwen_moe"], default="qwen")
     args = parser.parse_args()
 
     device = resolve_device(args.device)
     is_gptoss = args.model_family == "gptoss"
-    dir_suffix = "_gptoss" if is_gptoss else ""
+    is_qwen_moe = args.model_family == "qwen_moe"
+    dir_suffix = "_gptoss" if is_gptoss else ("_qwen_moe" if is_qwen_moe else "")
 
     # Load control responses (we score the model's uncertainty BEFORE persona
     # is introduced — that's the "baseline confidence" we want).
@@ -143,7 +144,13 @@ def main():
         print(f"Shard {args.shard_id}/{args.num_shards}: {len(ctrl_records)} records")
 
     # Load model
-    model_id = args.model or (GPTOSS_MODEL if is_gptoss else SUBJECT_MODEL)
+    if is_qwen_moe:
+        from src.config import QWEN_MOE_MODEL
+        model_id = args.model or QWEN_MOE_MODEL
+    elif is_gptoss:
+        model_id = args.model or GPTOSS_MODEL
+    else:
+        model_id = args.model or SUBJECT_MODEL
     if is_gptoss:
         model, tokenizer, _ = load_model_gptoss(model_id, device)
     else:

@@ -39,6 +39,7 @@ from src.lib import read_jsonl, resolve_layer_indices
 
 BEST_LAYER_QWEN = 30
 BEST_LAYER_GPTOSS = 18  # ~0.75 of 24 layers
+BEST_LAYER_QWEN_MOE = 36  # ~0.75 of 48 layers
 REF_K = 100
 K_POINTS_THINKING = [10, 25, 50, 75, 100]
 
@@ -54,14 +55,22 @@ def load_features(feat_dir, layer: int, k_pct: int) -> tuple[np.ndarray, np.ndar
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--layer", type=int, default=None)
-    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss", "qwen_moe"], default="qwen")
     args = parser.parse_args()
 
     is_gptoss = args.model_family == "gptoss"
-    suffix = "_gptoss" if is_gptoss else ""
+    is_qwen_moe = args.model_family == "qwen_moe"
+    suffix = "_gptoss" if is_gptoss else ("_qwen_moe" if is_qwen_moe else "")
     feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
     gen_dir = GENERATED_DIR / f"sycophancy{suffix}"
-    best_layer = args.layer or (BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER_QWEN)
+    if args.layer:
+        best_layer = args.layer
+    elif is_gptoss:
+        best_layer = BEST_LAYER_GPTOSS
+    elif is_qwen_moe:
+        best_layer = BEST_LAYER_QWEN_MOE
+    else:
+        best_layer = BEST_LAYER_QWEN
 
     # ─── Load features for all K at the chosen layer ─────────────────────
     feats: dict[int, np.ndarray] = {}
