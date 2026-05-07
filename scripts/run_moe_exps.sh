@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-cd /home/viliana-dev/my_projects/sycophancy-uncertainty
+cd "$(dirname "$0")/.."
 
 echo "=== Geometry for Qwen MoE (CPU only) ==="
 .venv/bin/python -u scripts/exp_geometry.py --model-family qwen_moe

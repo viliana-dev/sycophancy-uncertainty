@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from huggingface_hub import HfApi
 
-REPO_ID = "viliana-dev/nested-geometry-sycophancy"
+REPO_ID = os.environ.get("HF_REPO_ID", "<your-username>/nested-geometry-sycophancy")
 TOKEN = os.environ["HF_TOKEN"]
 PROJECT = Path(__file__).resolve().parent.parent
 

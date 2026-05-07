@@ -1,7 +1,5 @@
 # Epistemic Uncertainty as Vulnerability to Sycophancy in Reasoning Models
 
-**Target:** EIML Workshop @ ICML 2026 (4-6 pages)
-**Authors:** Viliana Devbunova
 **Subject model:** Qwen3-14B
 **Dataset:** Anthropic sycophancy evals, 5100 questions (1700 per source, stratified)
 
