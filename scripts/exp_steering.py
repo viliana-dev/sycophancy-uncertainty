@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
     ANTHROPIC_EVALS_DIR, DATA_DIR, GENERATED_DIR, PLOTS_DIR, RESULTS_DIR,
-    SUBJECT_MODEL, GPTOSS_MODEL,
+    SUBJECT_MODEL, GPTOSS_MODEL, QWEN_MOE_MODEL,
 )
 from src.lib import (
     apply_chat_template,
@@ -48,6 +48,9 @@ STEERING_LAYER = 30
 
 BEST_LAYER_GPTOSS = 18
 STEERING_LAYER_GPTOSS = 18
+
+BEST_LAYER_QWEN_MOE = 36
+STEERING_LAYER_QWEN_MOE = 36
 
 
 # ── Probe training ──────────────────────────────────────────────────────────
@@ -469,7 +472,8 @@ def make_plots(results, plots_dir, suffix=""):
         max(dir_data.get("v_override", {}).get("unc", [0])),
     ) * 1.2))
 
-    model_name = "gpt-oss-20b (L18)" if suffix == "_gptoss" else "Qwen3-14B (L30)"
+    model_names = {"_gptoss": "gpt-oss-20b (L18)", "_qwen_moe": "Qwen3-30B-A3B (L36)", "": "Qwen3-14B (L30)"}
+    model_name = model_names.get(suffix, "Qwen3-14B (L30)")
     fig.suptitle(f"Activation Steering — {model_name}", fontsize=13)
     fig.tight_layout()
     path = plots_dir / f"steering_syco_rate{suffix}.png"
@@ -481,7 +485,7 @@ def make_plots(results, plots_dir, suffix=""):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--model-family", choices=["qwen", "gptoss"], default="qwen")
+    parser.add_argument("--model-family", choices=["qwen", "gptoss", "qwen_moe"], default="qwen")
     parser.add_argument("--direction", required=True,
                         choices=["baseline", "w_overall", "v_override", "random"])
     parser.add_argument("--alphas", nargs="+", type=float, required=True)
@@ -497,7 +501,8 @@ def main():
     args = parser.parse_args()
 
     is_gptoss = args.model_family == "gptoss"
-    suffix = "_gptoss" if is_gptoss else ""
+    is_qwen_moe = args.model_family == "qwen_moe"
+    suffix = "_gptoss" if is_gptoss else ("_qwen_moe" if is_qwen_moe else "")
 
     device = resolve_device(args.device)
     feat_dir = DATA_DIR / "features" / f"sycophancy{suffix}"
@@ -506,7 +511,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Compute directions (CPU) ─────────────────────────────────────────
-    best_layer = BEST_LAYER_GPTOSS if is_gptoss else BEST_LAYER
+    best_layer = BEST_LAYER_GPTOSS if is_gptoss else (BEST_LAYER_QWEN_MOE if is_qwen_moe else BEST_LAYER)
     print(f"Computing steering directions (layer {best_layer})...", flush=True)
     directions, rec_lookup, test_qids, test_groups, median, amb_lookup = compute_directions(
         feat_dir, gen_dir, best_layer=best_layer,
@@ -551,6 +556,11 @@ def main():
         steering_layer = STEERING_LAYER_GPTOSS
         template_fn = lambda tok, p: apply_chat_template_harmony(tok, p)
         parse_fn = parse_thinking_answer_harmony
+    elif is_qwen_moe:
+        model, tokenizer, _ = load_model(QWEN_MOE_MODEL, device)
+        steering_layer = STEERING_LAYER_QWEN_MOE
+        template_fn = apply_chat_template
+        parse_fn = parse_thinking_answer
     else:
         model, tokenizer, _ = load_model(SUBJECT_MODEL, device)
         steering_layer = STEERING_LAYER

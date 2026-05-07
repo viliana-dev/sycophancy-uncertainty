@@ -1,0 +1,132 @@
+{
+  "model": "gpt-oss-20b",
+  "layer": 18,
+  "n_train_conf": 1594,
+  "n_train_unc": 1499,
+  "n_test_conf": 276,
+  "n_test_unc": 277,
+  "median": 6.338578829294412e-05,
+  "linear_cka": 0.0473,
+  "linear_cka_syco_only": 0.168,
+  "linear_cka_ci95": [
+    0.0811,
+    0.1161
+  ],
+  "probe_cosine": 0.0949,
+  "probe_angle_deg": 84.56,
+  "principal_angles_k3": {
+    "angles_deg": [
+      31.0,
+      33.32,
+      79.39
+    ],
+    "min_deg": 31.0,
+    "max_deg": 79.39,
+    "mean_deg": 47.91
+  },
+  "principal_angles_k5": {
+    "angles_deg": [
+      17.54,
+      22.84,
+      23.26,
+      60.69,
+      89.3
+    ],
+    "min_deg": 17.54,
+    "max_deg": 89.3,
+    "mean_deg": 42.73
+  },
+  "principal_angles_k10": {
+    "angles_deg": [
+      11.03,
+      15.5,
+      16.26,
+      23.78,
+      27.41,
+      37.9,
+      55.04,
+      72.67,
+      79.43,
+      89.71
+    ],
+    "min_deg": 11.03,
+    "max_deg": 89.71,
+    "mean_deg": 42.88
+  },
+  "inclusion_sub3_super10": {
+    "unc_in_conf": 0.7489,
+    "conf_in_unc": 0.7634,
+    "asymmetry": -0.0145
+  },
+  "inclusion_sub5_super10": {
+    "unc_in_conf": 0.7467,
+    "conf_in_unc": 0.7676,
+    "asymmetry": -0.0209
+  },
+  "inclusion_sub5_super20": {
+    "unc_in_conf": 0.8205,
+    "conf_in_unc": 0.8128,
+    "asymmetry": 0.0077
+  },
+  "inclusion_sub3_super20": {
+    "unc_in_conf": 0.8131,
+    "conf_in_unc": 0.8144,
+    "asymmetry": -0.0013
+  },
+  "proj_resid_from3_onto10": {
+    "unc_onto_conf": 0.1891,
+    "conf_onto_unc": 0.1708,
+    "asymmetry": -0.0184
+  },
+  "proj_resid_from5_onto10": {
+    "unc_onto_conf": 0.181,
+    "conf_onto_unc": 0.1749,
+    "asymmetry": -0.0061
+  },
+  "proj_resid_from5_onto20": {
+    "unc_onto_conf": 0.1266,
+    "conf_onto_unc": 0.1407,
+    "asymmetry": 0.0141
+  },
+  "proj_resid_equal_k5": {
+    "unc_onto_conf": 0.3034,
+    "conf_onto_unc": 0.2849,
+    "asymmetry": -0.0184
+  },
+  "proj_resid_equal_k10": {
+    "unc_onto_conf": 0.2352,
+    "conf_onto_unc": 0.2323,
+    "asymmetry": -0.0029
+  },
+  "proj_resid_equal_k20": {
+    "unc_onto_conf": 0.2194,
+    "conf_onto_unc": 0.228,
+    "asymmetry": 0.0085
+  },
+  "permutation_test": {
+    "k_sub": 5,
+    "k_super": 20,
+    "observed_asymmetry": 0.0077,
+    "null_mean": 0.0001,
+    "null_std": 0.0047,
+    "p_value": 0.096,
+    "n_permutations": 500
+  },
+  "probe_capture_k5": {
+    "w_unc_by_conf_subspace": 0.0075,
+    "w_conf_by_unc_subspace": 0.008,
+    "asymmetry": -0.0005
+  },
+  "probe_capture_k10": {
+    "w_unc_by_conf_subspace": 0.0171,
+    "w_conf_by_unc_subspace": 0.0206,
+    "asymmetry": -0.0035
+  },
+  "probe_capture_k20": {
+    "w_unc_by_conf_subspace": 0.0209,
+    "w_conf_by_unc_subspace": 0.0266,
+    "asymmetry": -0.0057
+  },
+  "v_override_capture_by_unc_k10": 0.0142,
+  "v_override_capture_by_unc_k20": 0.019
+}
