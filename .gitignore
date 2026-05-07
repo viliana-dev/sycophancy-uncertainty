@@ -24,3 +24,11 @@ data/sources/
 # Logs
 logs/
 *.log
+
+# Generated datasets (mirrored on HuggingFace)
+data/generated/sycophancy_gptoss/
+data/generated/sycophancy_qwen_moe/
+data/generated/sycophancy/steering/
+data/generated/sycophancy/answer_entropy.jsonl
+data/generated/sycophancy/labeled_unfiltered.jsonl
+data/generated/sycophancy/splits_unfiltered.json
