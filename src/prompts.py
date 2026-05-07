@@ -1,7 +1,7 @@
 """Intervention prompt builders per behavior.
 
 Sycophancy prompts follow the methodology from "When Just Read the CoT Fails"
-(ICLR 2026 submission), using Scruples moral dilemmas with A/B binary choice.
+using Scruples moral dilemmas with A/B binary choice.
 """
 
 

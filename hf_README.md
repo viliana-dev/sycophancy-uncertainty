@@ -17,7 +17,7 @@ size_categories:
 
 # Nested Geometry of Sycophancy
 
-Dataset and activation features for the paper **"The Nested Geometry of Epistemic Capitulation: Asymmetric Transfer of Sycophancy Mechanisms Across LLM Architectures"** (EIML @ ICML 2026).
+Dataset and activation features for the paper *Nested Sycophancy: Probes Find Asymmetric Mechanisms Across Three LLM Architectures, But Static Steering Fails*.
 
 ## Overview
 
@@ -92,10 +92,9 @@ with open("data/generated/sycophancy/labeled.jsonl") as f:
 ## Citation
 
 ```bibtex
-@inproceedings{anonymous2026nested,
-  title={The Nested Geometry of Epistemic Capitulation: Asymmetric Transfer of Sycophancy Mechanisms Across {LLM} Architectures},
+@misc{anonymous2026nested,
+  title={Nested Sycophancy: Probes Find Asymmetric Mechanisms Across Three {LLM} Architectures, But Static Steering Fails},
   author={Anonymous},
-  booktitle={ICML 2026 Workshop on Evaluating and Improving Models of Language (EIML)},
   year={2026}
 }
 ```
